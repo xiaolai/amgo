@@ -1,5 +1,5 @@
-// Package opencode implements bounded, non-interactive OpenCode jobs. Live
-// session attachment is not part of this adapter yet.
+// Package opencode implements bounded, non-interactive OpenCode jobs and
+// explicit-endpoint delivery to an existing loopback server.
 package opencode
 
 import (
@@ -28,14 +28,19 @@ func (a *Adapter) Name() string { return model.AdapterOpenCode }
 func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 	caps := model.Capabilities{
 		Adapter:         model.AdapterOpenCode,
-		Maturity:        model.MaturityFixtureTested,
+		Maturity:        model.MaturityNativeVerified,
 		MinKnownVersion: MinVersion,
 		TestedVersions:  []string{TestedVersion},
 		Jobs:            false,
+		LiveMessaging:   true,
 		Constraints: []string{
 			"jobs use a locally owned opencode run process; external servers are never attached or disposed",
 			"prompt is read from stdin, not argv",
 			"no auto-approve flag is added",
+			"existing-session send requires an explicit loopback endpoint; the TUI's random port has no documented discovery file",
+			"HTTP 204 means accepted, not delivered; no native receipt exists",
+			"server password and username are read from OPENCODE_SERVER_PASSWORD/OPENCODE_SERVER_USERNAME at send time",
+			"existing-session send and job continuation native-verified at 1.19.3 on macOS arm64",
 		},
 	}
 	out, err := exec.CommandContext(ctx, "opencode", "--version").Output()
@@ -52,15 +57,6 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		caps.Constraints = append(caps.Constraints, "opencode version could not be read")
 	}
 	return caps, nil
-}
-
-func (a *Adapter) Discover(ctx context.Context, req adapter.DiscoverRequest) ([]model.Candidate, error) {
-	return nil, nil
-}
-
-func (a *Adapter) Send(ctx context.Context, req adapter.SendRequest) (adapter.SendResult, error) {
-	return adapter.SendResult{}, model.NewError(model.ErrUnsupported,
-		"OpenCode existing-session messaging is not implemented; only owned jobs are supported")
 }
 
 // RunSpec builds `opencode run --format json` with the prompt on stdin.
