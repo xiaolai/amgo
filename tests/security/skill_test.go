@@ -61,6 +61,9 @@ func TestSkillKeepsPermissionBoundary(t *testing.T) {
 		"Do not run `amgo retry`",
 		"Always pass `--as <alias>`",
 		"Do not put secrets, credentials, tokens, private keys, private network",
+		"Never run `amgo run`, `amgo continue`, or `amgo cancel`",
+		"`completed` is the only success state",
+		"Do not change `--policy`",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("skill no longer states: %q", want)
@@ -82,6 +85,8 @@ func TestAgentsFallbackKeepsPermissionBoundary(t *testing.T) {
 		"Never retry an `unknown_submission`, and never run `amgo retry`",
 		"Never put secrets, credentials, private network details, or personal data",
 		"A skill file is instructions to an agent, not a permission control",
+		"Never start, continue or cancel a job unless the user asked for that exact",
+		"Only `completed` is success",
 	} {
 		if !strings.Contains(docs, want) {
 			t.Errorf("fallback instructions no longer state: %q", want)

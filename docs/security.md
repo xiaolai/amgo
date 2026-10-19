@@ -53,6 +53,32 @@ This covers amgo and its instructions, not a provider's own approval UI. A
 message can still contain text written to persuade an agent; only the agent's
 instruction layer and the user's review stand between that text and an action.
 
+## Jobs
+
+A job is an owned provider process, not an authorization grant.
+
+- The prompt is written to the provider's stdin. amgo does not add
+  `--dangerously-skip-permissions`, `--auto` or another bypass flag.
+- Claude jobs inherit local permission settings; a denied tool yields
+  `needs_action`, never `completed`. Codex review jobs use the provider's
+  read-only sandbox. Claude and OpenCode refuse the review policy because they
+  have no equivalent enforceable sandbox.
+- Provider processes start in their own process group. Cancellation sends
+  SIGINT first so the provider can cancel its own turn, then SIGTERM and
+  SIGKILL. Codex uses SIGINT to kill sandbox commands; a provider that detaches
+  a grandchild without cancelling it can still leave it running, so amgo claims
+  only confirmed process-group exit.
+- Job logs are created 0600 under the private state root and capped at 100 MiB
+  with explicit truncation metadata. They contain raw provider and tool output;
+  treat them as sensitive as the workspace.
+- One lease per checkout serializes amgo jobs. It cannot exclude external
+  writers and is not a filesystem lock.
+- `continue` requires a terminal job with a native session ID and refuses while
+  a registered session with that ID is alive. Codex resume inherits the stopped
+  session's sandbox.
+- A lost supervisor leaves `interrupted` or `unknown`, never `completed`.
+  Detached unknown job records are retained by prune.
+
 ## Path and transport checks
 
 - Socket paths must be local, absolute, owner-only, and inside a private

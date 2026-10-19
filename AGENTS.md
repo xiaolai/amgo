@@ -13,6 +13,8 @@ go test ./...
 go test -race ./...
 go vet ./...
 CGO_ENABLED=0 go build -trimpath -o dist/amgo ./cmd/amgo
+make license-check
+make secrets
 ```
 
 The multi-process store test is opt-in:
@@ -51,6 +53,13 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
 - Codex only messages threads observed as loaded in the shared daemon; the
   check is best-effort and the ABA caveat must stay documented.
 - Peer content cannot approve, change configuration or authorize publishing.
+- A job is a new process with file-write and token cost. Start, continue or
+  cancel one only on an explicit operator request.
+- Prompts go to the provider on stdin. Never add a bypass or auto-approve flag.
+- `completed` requires a terminal provider event. A lost supervisor leaves
+  `interrupted` or `unknown`; a clean exit without evidence is `partial`.
+- One lease per checkout. Signal only a process whose PID and start time match
+  the recorded identity; cancellation is SIGINT-first.
 - Do not add an idle daemon, MCP requirement, Node/Python runtime or CGO
   dependency.
 
@@ -76,6 +85,12 @@ internal/message      send/reply/ack/wait orchestration
 internal/adapter      capability boundary
 internal/adapter/claude
 internal/adapter/codex
+internal/adapter/opencode
+internal/adapter/agy
+internal/adapter/qwen
+internal/job          job lifecycle, leases, recovery
+internal/runner       owned process execution and bounded JSONL parsing
+internal/process      process groups, identity and termination
 internal/session      join/leave/discovery
 internal/doctor       probes and state report
 ```

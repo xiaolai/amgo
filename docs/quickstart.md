@@ -135,6 +135,46 @@ amgo prune --dry-run
 amgo prune --yes --compact
 ```
 
+## Jobs
+
+A job runs one owned, non-interactive provider process. The prompt, state,
+native session ID, usage, bounded log and terminal evidence are stored locally.
+Use exactly one of `--prompt-file`, `--stdin` or `--text`; the prompt is passed
+to the provider on stdin and does not appear in the process list.
+
+```sh
+amgo run codex --cwd . --prompt-file task.txt --deadline 15m
+amgo run claude --cwd . --prompt-file review.txt --background
+amgo jobs --limit 20
+amgo status <job-id>
+amgo follow <job-id> --after 0 --timeout 60s
+amgo result <job-id>
+amgo continue <job-id> --prompt-file followup.txt
+amgo cancel <job-id>
+```
+
+States are `created → starting → running → completed | partial | needs_action |
+failed | timed_out | cancelled | interrupted | unknown`. `completed` requires a
+terminal provider event; a clean provider exit without one is `partial` and
+`result_unverified`. A lost supervisor yields `interrupted` or `unknown`, never
+`completed`.
+
+One amgo job owns a checkout at a time. A second `run` there returns
+`workspace_busy` (exit 10). The lease coordinates amgo writers only; it cannot
+exclude an editor, build tool or another agent.
+
+`--policy review` maps to Codex's read-only sandbox. Claude and OpenCode refuse
+that policy because they do not expose an equivalent enforceable sandbox.
+Codex resume cannot change its sandbox, so a review continuation is refused.
+
+`--background` starts one detached supervisor and returns immediately. The
+supervisor exits after the provider does. `cancel` asks the provider to cancel
+with SIGINT, then escalates to SIGTERM and SIGKILL, and confirms process-group
+exit.
+
+`continue` requires a terminal job with a native session ID, refuses while that
+session is registered as live, and creates a new job linked by `resume_of`.
+
 ## Honest limits
 
 - Claude has no observable native receipt for an external sender. Holds,
@@ -144,5 +184,13 @@ amgo prune --yes --compact
   adapter fails closed outside the tested minor version.
 - The Codex loaded-target check is best-effort: a loaded, unloaded and reloaded
   thread between checks is invisible.
-- No amgo process survives a bounded command or wait.
-- Windows, SSH and remote hosts are not supported in v0.1.
+- A provider can detach a grandchild that ignores provider cancellation. amgo
+  confirms the process group it owns; it does not claim a kernel sandbox.
+- Claude jobs inherit local permission settings and may be denied tools; that is
+  `needs_action` or `partial`, never `completed`.
+- Job logs are private (0600) and capped at 100 MiB with explicit truncation.
+  They can contain model output and tool output.
+- agy jobs are disabled because the current account is not eligible; Qwen is
+  disabled because the binary is absent.
+- No amgo process survives a bounded command, wait or job.
+- Windows, SSH and remote hosts are not supported in v0.2.

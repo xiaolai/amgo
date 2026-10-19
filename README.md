@@ -1,16 +1,19 @@
 # amgo
 
-Native session messaging for existing Claude Code and Codex sessions.
+Native session messaging and owned jobs for existing Claude Code, Codex and
+OpenCode sessions.
 
 [![ci](https://github.com/xiaolai/amgo/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaolai/amgo/actions/workflows/ci.yml)
 
-`amgo` is a standalone Go CLI. It does not start an agent, daemon, MCP server or
+`amgo` is a standalone Go CLI. It does not require a daemon, MCP server or
 model SDK. It discovers sessions that are already running, sends one bounded
-message through the provider's own local transport, and keeps a durable outbox
-with explicit acknowledgement rules.
+message through the provider's own local transport, and runs one owned
+non-interactive provider process with persistent state, bounded logs and
+confirmed cancellation.
 
-**v0.1.2** supports Claude Code and Codex on macOS and Linux. Supervised jobs
-and the other adapters are later milestones.
+**v0.2.0** supports Claude Code and Codex messaging, and Claude Code, Codex and
+OpenCode jobs, on macOS and Linux. agy and Qwen stay disabled until a pinned
+native result gate passes.
 
 ## Why
 
@@ -58,6 +61,21 @@ printf '%s' 'Review the parser change.' | \
 amgo wait <message-id> --until acknowledged --timeout 60s
 ```
 
+Jobs:
+
+```sh
+amgo run codex --cwd . --prompt-file task.txt --background --deadline 15m
+amgo status <job-id>
+amgo follow <job-id> --after 0 --timeout 60s
+amgo result <job-id>
+amgo continue <job-id> --prompt-file followup.txt
+amgo cancel <job-id>
+```
+
+The prompt is read from stdin or a file and passed to the provider on stdin, so
+it does not appear in the process list. The provider's own permission rules and
+sandbox apply; amgo never adds a bypass flag.
+
 `--accept-unknown-delivery` is required once per Claude target: an external
 sender cannot observe native holds or refusals. The acknowledgement is
 persisted for later sends to the same target.
@@ -101,8 +119,9 @@ state is not `unknown`.
 ## Requirements
 
 - Claude Code 2.1.248+ for Claude messaging.
-- Codex 0.163.x for Codex messaging; other minor releases fail closed.
-- macOS or Linux. Windows is not supported in v0.1.
+- Codex 0.163.x for Codex messaging and jobs; other minor releases fail closed.
+- OpenCode 1.19.3 for OpenCode jobs.
+- macOS or Linux. Windows is not supported in v0.2.
 - The same OS user as the target session. That user boundary is the trust
   boundary; amgo is not an authorization or sandbox boundary.
 - Go 1.26+ only when building from source.
@@ -125,6 +144,11 @@ state is not `unknown`.
 | `conversation` | Create, show or close a named budget |
 | `export`, `prune` | JSONL export and explicit retention |
 | `recover` | Reconcile dead attempts and import the outcome journal |
+| `run` | Start an owned Claude, Codex or OpenCode job in a workspace |
+| `jobs`, `status`, `follow` | List jobs, inspect evidence and wait for new events |
+| `result` | Read a terminal job's result and bounded log artifact |
+| `cancel` | Request cancellation and confirm process-group exit |
+| `continue` | Continue a stopped job's native session in a new job |
 
 Run `amgo <command> --help` for flags. Commands support `--json` with a
 versioned envelope and stable exit codes; `export` always writes JSONL.
@@ -170,7 +194,12 @@ config, and keep amgo's state root owner-only.
 | Codex WebSocket discovery and queue send | implemented; native gates passing |
 | Idempotency, budgets, reply/ack/wait, retry, recovery, export, prune | implemented |
 | Doctor and read-only state invariants | implemented |
-| Jobs, OpenCode, Qwen, agy live messaging | later milestones |
+| Foreground/background jobs with leases, bounded logs and cancellation | implemented; native gates passing |
+| Codex and Claude job continuation | implemented; native gates passing |
+| OpenCode owned jobs and continuation | implemented; native gate passing |
+| agy structured jobs | blocked: account not eligible in this location |
+| Qwen jobs and peer messaging | blocked: binary not installed |
+| Optional isolated worktrees (F-068) | later milestone |
 | Linux native certification and Windows | not claimed |
 
 ## Limits
@@ -185,7 +214,18 @@ config, and keep amgo's state root owner-only.
 - A send to an idle Codex thread starts a turn and can spend tokens.
 - Retrying an `unknown` outcome is a deliberate operator action with a
   duplicate-risk acceptance; it is never automatic.
-- No amgo process survives a bounded command. There is no always-on daemon.
+- A job owns one checkout through an amgo lease. It does not exclude editors,
+  build tools or another agent outside amgo writing to the same checkout.
+- Job cancellation asks the provider to cancel first (SIGINT), then escalates to
+  SIGTERM and SIGKILL. A provider that detaches a grandchild without cancelling
+  it can still leave that process running; amgo reports confirmed group exit,
+  not a kernel-enforced sandbox.
+- Claude jobs inherit local permission settings and can be denied tools; a
+  denied or turn-limited run is `needs_action` or `partial`, never `completed`.
+- Codex resume inherits the stopped session's sandbox, so a `--policy review`
+  continuation is refused rather than silently downgraded.
+- No amgo process survives a bounded command or job. There is no always-on
+  daemon.
 - State is local and owner-only (0700/0600). It is not encrypted at rest; the
   same-user boundary applies.
 
