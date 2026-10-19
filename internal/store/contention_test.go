@@ -80,7 +80,7 @@ func TestContentionMultiProcess(t *testing.T) {
 	}
 	_ = st.Close()
 
-	const procs, each = 8, 10
+	const procs, each = 16, 10
 	cmds := make([]*exec.Cmd, procs)
 	outs := make([]*bytes.Buffer, procs)
 	for i := 0; i < procs; i++ {
