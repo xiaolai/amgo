@@ -12,6 +12,7 @@ profile, `.env`, `gh` login and tap push access live outside the repository.
 | `package-release.sh` | no | Build deterministic `.tar.gz` archives with `LICENSE` and `README.md` |
 | `homebrew-formula.sh` | no | Render `Formula/amgo.rb` from the archive checksums |
 | `tap-version-guard.sh` | no | Refuse a tap update that is equal to or older than the current formula |
+| `perf-record.sh` | no | Record startup, send cycle, contention, peak RSS and residual process count |
 | `release-check.sh` | yes | Verify binary provenance, run govulncheck, and run the native delivery gates; spends model tokens |
 | `sign-notarize.sh` | yes | Developer ID signing and Apple notarisation of the two darwin binaries |
 | `publish-release.sh` | yes | Create the GitHub release, verify anonymous downloads, update the Homebrew tap, and dispatch the clean-Mac check |

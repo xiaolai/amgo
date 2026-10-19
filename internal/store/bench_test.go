@@ -72,3 +72,49 @@ func BenchmarkListSessions(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSendCycle(b *testing.B) {
+	st, err := Open(filepath.Join(b.TempDir(), "state.db"), 2*time.Second)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	if err := st.CreateConversation(model.Conversation{
+		RecordVersion: 1, ID: "c_cycle", Participants: []string{"operator:1", "s_recipient"},
+		MaxMessages: 1_000_000, ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now,
+	}); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		id := fmt.Sprintf("m_cycle_%d", i)
+		if _, err := st.PrepareSend(PrepareRequest{
+			CallerID: "operator:1", IdemKey: fmt.Sprintf("cycle-%d", i), Fingerprint: "fp",
+			Message: model.Message{
+				RecordVersion: 1, ID: id, ConversationID: "c_cycle", SenderLabel: "operator",
+				RecipientSessionID: "s_recipient", Body: "body", BodySHA256: "h", BodyBytes: 4,
+				State: model.MessageDispatching, CreatedAt: now, ExpiresAt: now.Add(time.Hour),
+			},
+			Attempt: model.Attempt{
+				RecordVersion: 1, ID: "a_" + id, MessageID: id, ReservationID: "r_" + id,
+				State: model.AttemptDispatching, StartedAt: now, DispatchDeadline: now.Add(time.Minute),
+			},
+			Reservation: model.Reservation{
+				RecordVersion: 1, ID: "r_" + id, MessageID: id, ConversationID: "c_cycle",
+				State: model.ReservationReserved, CreatedAt: now, DispatchDeadline: now.Add(time.Minute),
+			},
+			ConversationID: "c_cycle", Now: now,
+		}); err != nil {
+			b.Fatal(err)
+		}
+		if err := st.MarkDispatched("a_"+id, 20*time.Second); err != nil {
+			b.Fatal(err)
+		}
+		if err := st.FinalizeAttempt(FinalizeRequest{
+			AttemptID: "a_" + id, Outcome: "submitted", NativeDisposition: model.DispositionQueued, Now: now,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

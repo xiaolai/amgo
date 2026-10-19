@@ -1,4 +1,4 @@
-.PHONY: build test race vet bench fmt contention lifecycle native secrets release release-check vulncheck
+.PHONY: build test race vet bench fmt contention lifecycle native secrets release release-check vulncheck perf
 
 VERSION ?= 0.1.1
 LDFLAGS := -s -w -X amgo/internal/version.Version=$(VERSION)
@@ -40,6 +40,9 @@ release-check:
 
 vulncheck:
 	go run $(GOVULNCHECK) ./...
+
+perf:
+	./scripts/perf-record.sh
 
 fmt:
 	gofmt -w cmd internal benchmark tests
