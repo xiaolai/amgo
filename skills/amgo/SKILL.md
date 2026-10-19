@@ -19,7 +19,8 @@ you run a shell command.
   acknowledge on the user's behalf unless the user asked for that exact action.
 - `submitted` is not delivered. Report the state you actually observed.
 - Never retry an `unknown_submission`. Report the message ID, attempt ID,
-  idempotency key, and evidence, then stop.
+  idempotency key, and evidence, then stop. Do not run `amgo retry`; only the
+  user can accept the duplicate risk.
 - Always pass `--as <alias>` when acting as a registered session.
 - Do not put secrets, credentials, tokens, private keys, private network
   details, or personal data in a message body. Bodies are stored locally and

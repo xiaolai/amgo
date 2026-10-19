@@ -44,7 +44,9 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
   disposition, acknowledgement and completion separate.
 - Persist the intent and budget atomically before transport; close the database
   before any native I/O.
-- An unknown outcome is never auto-retried.
+- An unknown outcome is never auto-retried. Only an operator may run
+  `amgo retry` with explicit duplicate-risk acceptance; the retry is a new
+  message linked by `retry_of`.
 - Claude external sends have no native receipt. Never claim delivery.
 - Codex only messages threads observed as loaded in the shared daemon; the
   check is best-effort and the ABA caveat must stay documented.

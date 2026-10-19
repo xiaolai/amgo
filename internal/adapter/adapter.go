@@ -19,6 +19,7 @@ type SendRequest struct {
 	Target         model.Target
 	MessageID      string
 	ConversationID string
+	RetryOf        string
 	ReplyTo        string
 	SenderLabel    string
 	Body           string
@@ -50,6 +51,9 @@ func FrameBody(req SendRequest) string {
 		from = "operator"
 	}
 	out := fmt.Sprintf("[amgo message %s from %s conversation %s]\n%s", req.MessageID, from, req.ConversationID, req.Body)
+	if req.RetryOf != "" {
+		out += fmt.Sprintf("\n[amgo: operator-authorized retry of %s; a duplicate native submission is possible]", req.RetryOf)
+	}
 	if req.ExpectReply {
 		out += fmt.Sprintf("\n[amgo: reply with `amgo reply %s --stdin`]", req.MessageID)
 	}

@@ -99,7 +99,9 @@ type SendInput struct {
 	RecipientAlias        string
 	SenderAlias           string
 	ConversationName      string
+	ConversationID        string
 	ReplyTo               string
+	RetryOf               string
 	Body                  string
 	IdempotencyKey        string
 	ExpectReply           bool
@@ -245,6 +247,7 @@ func (s *Service) Send(ctx context.Context, in SendInput) (out SendOutput, err e
 		SenderLabel:        senderLabel,
 		RecipientSessionID: recipientSessionID,
 		ReplyTo:            replyTo,
+		RetryOf:            in.RetryOf,
 		Body:               in.Body,
 		BodySHA256:         bodyHash(in.Body),
 		BodyBytes:          len([]byte(in.Body)),
@@ -295,7 +298,7 @@ func (s *Service) Send(ctx context.Context, in SendInput) (out SendOutput, err e
 		prep.AckProvenance = ackProv
 		prep.AckActor = senderLabel
 	}
-	if in.ConversationName == "" && replyTo == "" {
+	if in.ConversationName == "" && in.ConversationID == "" && replyTo == "" {
 		prep.NewConversation = &model.Conversation{
 			RecordVersion: 1,
 			ID:            conversationID,
@@ -406,6 +409,7 @@ func (s *Service) Send(ctx context.Context, in SendInput) (out SendOutput, err e
 		Target:         target,
 		MessageID:      msgID,
 		ConversationID: conversationID,
+		RetryOf:        in.RetryOf,
 		ReplyTo:        replyTo,
 		SenderLabel:    senderLabel,
 		Body:           in.Body,
@@ -748,6 +752,9 @@ func (s *Service) resolveSender(st *store.Store, alias string) (id, label, calle
 }
 
 func (s *Service) resolveTarget(st *store.Store, in SendInput, senderID string) (target model.Target, recipientSessionID, conversationID string, explicitConv bool, replyTo string, localOnly bool, ackProv model.AckProvenance, err error) {
+	if in.ReplyTo != "" && (in.ConversationID != "" || in.ConversationName != "") {
+		return target, "", "", false, "", false, "", model.NewError(model.ErrUsage, "reply and conversation selection are mutually exclusive")
+	}
 	if in.ReplyTo != "" {
 		orig, err := st.GetMessage(in.ReplyTo)
 		if err != nil {
@@ -782,14 +789,21 @@ func (s *Service) resolveTarget(st *store.Store, in SendInput, senderID string) 
 	if err != nil {
 		return target, "", "", false, "", false, "", err
 	}
-	if in.ConversationName != "" {
+	switch {
+	case in.ConversationID != "":
+		if in.ConversationName != "" {
+			return target, "", "", false, "", false, "", model.NewError(model.ErrUsage, "conversation ID and conversation name are mutually exclusive")
+		}
+		conversationID = in.ConversationID
+		explicitConv = true
+	case in.ConversationName != "":
 		conv, err := st.GetConversationByName(in.ConversationName)
 		if err != nil {
 			return target, "", "", false, "", false, "", err
 		}
 		conversationID = conv.ID
 		explicitConv = true
-	} else {
+	default:
 		conversationID = ids.New("c")
 		explicitConv = false
 	}

@@ -100,6 +100,8 @@ func Run(args []string, in io.Reader, out, errOut io.Writer) int {
 		return app.cmdLeave(rest[1:])
 	case "send":
 		return app.cmdSend(ctx, rest[1:])
+	case "retry":
+		return app.cmdRetry(ctx, rest[1:])
 	case "reply":
 		return app.cmdReply(ctx, rest[1:])
 	case "inbox":
@@ -137,6 +139,7 @@ Commands:
   join         register a live Claude or Codex session
   leave        remove an amgo registration
   send         send a message to a registered session
+  retry        resend an unknown outcome; requires duplicate-risk acceptance
   reply        reply to a message
   inbox        list local messages
   read         inspect a message, attempts and events
@@ -745,6 +748,39 @@ func (a *App) cmdSend(ctx context.Context, args []string) int {
 	})
 }
 
+func (a *App) cmdRetry(ctx context.Context, args []string) int {
+	fs := flag.NewFlagSet("retry", flag.ContinueOnError)
+	fs.SetOutput(a.Err)
+	as := fs.String("as", "", "sender alias")
+	key := fs.String("idempotency-key", "", "idempotency key for the retry")
+	accept := fs.Bool("accept-duplicate-risk", false, "accept that the original submission may already have reached the target")
+	acceptUnknown := fs.Bool("accept-unknown-delivery", false, "accept that Claude holds and refusals are unobservable")
+	pos, err := parseCommand(fs, args, map[string]bool{"as": true, "idempotency-key": true})
+	if err != nil {
+		return a.fail("retry", model.WrapError(model.ErrUsage, "invalid flags", err), nil)
+	}
+	if len(pos) != 1 {
+		return a.fail("retry", model.NewError(model.ErrUsage, "usage: amgo retry <message-id> --accept-duplicate-risk"), nil)
+	}
+	if err := a.maybeRecover(); err != nil {
+		return a.fail("retry", err, nil)
+	}
+	out, err := a.Svc.Retry(ctx, message.RetryInput{
+		MessageID:             pos[0],
+		SenderAlias:           *as,
+		AcceptDuplicateRisk:   *accept,
+		AcceptUnknownDelivery: *acceptUnknown,
+		IdempotencyKey:        *key,
+	})
+	if err != nil {
+		return a.failSend("retry", err, out, "", *key)
+	}
+	return a.ok("retry", sendData(out), func() {
+		fmt.Fprintf(a.Out, "retried %s (retry of %s) (%s, native %s) duplicate risk accepted key=%s\n",
+			out.Message.ID, out.Message.RetryOf, out.Submission, out.NativeDisposition, render.Safe(out.IdempotencyKey))
+	})
+}
+
 func sendData(out message.SendOutput) map[string]any {
 	return map[string]any{
 		"message_id":           out.Message.ID,
@@ -754,6 +790,8 @@ func sendData(out message.SendOutput) map[string]any {
 		"submission":           out.Submission,
 		"native_disposition":   out.NativeDisposition,
 		"native_submission_id": out.NativeSubmissionID,
+		"retry_of":             out.Message.RetryOf,
+		"retried_by":           out.Message.RetriedBy,
 		"acknowledged":         out.Message.State == model.MessageAcknowledged,
 		"duplicate":            out.Duplicate,
 		"message_pruned":       out.MessagePruned,

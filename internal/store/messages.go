@@ -76,6 +76,34 @@ func (s *Store) PrepareSend(req PrepareRequest) (PrepareResult, error) {
 			return nil
 		}
 
+		if req.Message.RetryOf != "" {
+			var orig model.Message
+			if err := getJSON(tx.Bucket(bucketMessages), []byte(req.Message.RetryOf), &orig); err != nil {
+				return model.NewError(model.ErrTargetUnavailable, "retry target not found")
+			}
+			if orig.State != model.MessageUnknown {
+				return model.NewError(model.ErrPolicyRefused, "only an unknown outcome can be retried; use send for a known failure")
+			}
+			if orig.ConversationID != req.Message.ConversationID {
+				return model.NewError(model.ErrUsage, "a retry must stay in the original conversation")
+			}
+			if orig.BodySHA256 != req.Message.BodySHA256 {
+				return model.NewError(model.ErrUsage, "a retry must reuse the original body")
+			}
+			orig.RetriedBy = append(orig.RetriedBy, req.Message.ID)
+			if err := putJSON(tx.Bucket(bucketMessages), []byte(orig.ID), orig); err != nil {
+				return err
+			}
+			if err := appendEvent(tx, model.Event{
+				MessageID: orig.ID,
+				Kind:      "retry_authorized",
+				At:        req.Now,
+				Payload:   map[string]any{"retry_message_id": req.Message.ID},
+			}); err != nil {
+				return err
+			}
+		}
+
 		convs := tx.Bucket(bucketConversations)
 		var conv model.Conversation
 		if req.NewConversation != nil {

@@ -84,6 +84,20 @@ amgo inbox
 amgo read <message-id>
 ```
 
+### Retrying an unknown outcome
+
+An `unknown` outcome is never retried automatically. An operator may explicitly
+resend it:
+
+```sh
+amgo retry <message-id> --accept-duplicate-risk
+```
+
+`retry` reuses the original body and conversation, creates a new message linked
+by `retry_of`, records `retried_by` on the original, and accepts that the first
+submission may already have reached the target. It refuses any message whose
+state is not `unknown`.
+
 ## Requirements
 
 - Claude Code 2.1.248+ for Claude messaging.
@@ -106,6 +120,7 @@ amgo read <message-id>
 | `reply` | Reply to a message; a reply is also an acknowledgement |
 | `inbox`, `read` | Local message list and full record |
 | `ack` | Explicit acknowledgement with provenance |
+| `retry` | Resend an unknown outcome; requires `--accept-duplicate-risk` and records the original ID |
 | `wait` | Bounded wait for acknowledgement or reply |
 | `conversation` | Create, show or close a named budget |
 | `export`, `prune` | JSONL export and explicit retention |
@@ -153,7 +168,7 @@ config, and keep amgo's state root owner-only.
 | Explicit join/leave and metadata-only discovery | implemented |
 | Claude UDS send, peer-key handling, session-ID guard | implemented; native gates passing |
 | Codex WebSocket discovery and queue send | implemented; native gates passing |
-| Idempotency, budgets, reply/ack/wait, recovery, export, prune | implemented |
+| Idempotency, budgets, reply/ack/wait, retry, recovery, export, prune | implemented |
 | Doctor and read-only state invariants | implemented |
 | Jobs, OpenCode, Qwen, agy live messaging | later milestones |
 | Linux native certification and Windows | not claimed |
@@ -168,6 +183,8 @@ config, and keep amgo's state root owner-only.
 - The Codex loaded-target guard is best-effort; a loaded, unloaded and reloaded
   cycle between checks is invisible.
 - A send to an idle Codex thread starts a turn and can spend tokens.
+- Retrying an `unknown` outcome is a deliberate operator action with a
+  duplicate-risk acceptance; it is never automatic.
 - No amgo process survives a bounded command. There is no always-on daemon.
 - State is local and owner-only (0700/0600). It is not encrypted at rest; the
   same-user boundary applies.

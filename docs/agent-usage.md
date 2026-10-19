@@ -56,7 +56,8 @@ wait on a cross-session message.
 - Use `--as <alias>` and a stable idempotency key.
 - `submitted` is not delivered. Report the observed state and wait for a
   recipient-provenance acknowledgement.
-- Never retry an `unknown_submission`. Stop and report the IDs and evidence.
+- Never retry an `unknown_submission`, and never run `amgo retry`. Only the
+  user can accept the duplicate risk.
 - Never put secrets, credentials, private network details, or personal data in
   a message body.
 ```

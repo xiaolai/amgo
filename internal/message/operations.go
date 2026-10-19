@@ -35,6 +35,72 @@ func (s *Service) Reply(ctx context.Context, in ReplyInput) (SendOutput, error) 
 	})
 }
 
+type RetryInput struct {
+	MessageID             string
+	SenderAlias           string
+	AcceptDuplicateRisk   bool
+	AcceptUnknownDelivery bool
+	IdempotencyKey        string
+}
+
+// Retry sends a new message for an outcome that is unknown. It is an explicit
+// operator override: the original submission may already have reached the
+// target, so the caller must accept that duplicate risk. The new message keeps
+// the original body and conversation and records RetryOf.
+func (s *Service) Retry(ctx context.Context, in RetryInput) (SendOutput, error) {
+	if !in.AcceptDuplicateRisk {
+		return SendOutput{}, &model.CodedError{
+			Code:    model.ErrPolicyRefused,
+			Message: "retry requires --accept-duplicate-risk; the original submission may have reached the target",
+		}
+	}
+	st, err := s.open()
+	if err != nil {
+		return SendOutput{}, err
+	}
+	orig, err := st.GetMessage(in.MessageID)
+	if err != nil {
+		_ = st.Close()
+		return SendOutput{}, model.NewError(model.ErrTargetUnavailable, "original message not found")
+	}
+	if orig.State != model.MessageUnknown {
+		_ = st.Close()
+		return SendOutput{}, model.NewError(model.ErrPolicyRefused, "only an unknown outcome can be retried; use send for a known failure")
+	}
+	attempts, err := st.ListAttempts(orig.ID)
+	if err != nil {
+		_ = st.Close()
+		return SendOutput{}, err
+	}
+	sess, err := st.GetSession(orig.RecipientSessionID)
+	if err != nil || sess.UnregisteredAt != nil {
+		_ = st.Close()
+		return SendOutput{}, model.NewError(model.ErrTargetUnavailable, "retry target is not registered")
+	}
+	if len(attempts) > 0 && !sameRetryTarget(attempts[len(attempts)-1].Target, sess.Target) {
+		_ = st.Close()
+		return SendOutput{}, model.NewError(model.ErrTargetUnavailable, "retry target changed; send a new message explicitly")
+	}
+	_ = st.Close()
+	return s.Send(ctx, SendInput{
+		RecipientAlias:        sess.Alias,
+		SenderAlias:           in.SenderAlias,
+		ConversationID:        orig.ConversationID,
+		RetryOf:               orig.ID,
+		Body:                  orig.Body,
+		IdempotencyKey:        in.IdempotencyKey,
+		ExpectReply:           orig.ExpectReply,
+		AcceptUnknownDelivery: in.AcceptUnknownDelivery,
+	})
+}
+
+func sameRetryTarget(a, b model.Target) bool {
+	return a.Adapter == b.Adapter &&
+		a.HostID == b.HostID &&
+		a.ConfigHome == b.ConfigHome &&
+		a.NativeSessionID == b.NativeSessionID
+}
+
 type AckInput struct {
 	MessageID string
 	AsAlias   string

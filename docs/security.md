@@ -66,3 +66,8 @@ Unknown outcomes are never presented as success and never auto-retried. A
 post-native-acceptance persistence failure returns `outcome_unpersisted`; a
 refund that cannot be persisted returns `refund_pending`. Both are visible and
 recoverable rather than silently retry-safe.
+
+An `unknown` outcome is never retried automatically. An operator may run
+`amgo retry <message-id> --accept-duplicate-risk`; the new message records
+`retry_of`, the original records `retried_by`, and no other message state is
+retryable.

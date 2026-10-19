@@ -107,6 +107,8 @@ type Message struct {
 	SenderLabel        string       `json:"sender_label"`
 	RecipientSessionID string       `json:"recipient_session_id"`
 	ReplyTo            string       `json:"reply_to,omitempty"`
+	RetryOf            string       `json:"retry_of,omitempty"`
+	RetriedBy          []string     `json:"retried_by,omitempty"`
 	Body               string       `json:"body"`
 	BodySHA256         string       `json:"body_sha256"`
 	BodyBytes          int          `json:"body_bytes"`

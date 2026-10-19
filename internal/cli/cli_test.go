@@ -376,3 +376,22 @@ func TestFirstLineTruncatesAtRuneBoundary(t *testing.T) {
 		t.Fatalf("runes=%d", len([]rune(got)))
 	}
 }
+
+func TestRetryRequiresDuplicateRiskFlag(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Run([]string{"--home", t.TempDir(), "retry", "m_missing"}, strings.NewReader(""), &out, &errOut)
+	if code != 6 {
+		t.Fatalf("exit=%d err=%s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "accept-duplicate-risk") {
+		t.Fatalf("message does not name the flag: %s", errOut.String())
+	}
+}
+
+func TestRetryUnknownMessageIsTargetUnavailable(t *testing.T) {
+	var out, errOut bytes.Buffer
+	code := Run([]string{"--home", t.TempDir(), "retry", "m_missing", "--accept-duplicate-risk"}, strings.NewReader(""), &out, &errOut)
+	if code != 5 {
+		t.Fatalf("exit=%d err=%s", code, errOut.String())
+	}
+}

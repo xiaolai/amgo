@@ -708,3 +708,169 @@ func TestReopenFailureKeepsPreparedIDs(t *testing.T) {
 		t.Fatalf("prepared IDs were lost: %+v", out)
 	}
 }
+
+func TestRetryRequiresDuplicateRisk(t *testing.T) {
+	svc, fa, _ := setup(t, "fake", false)
+	fa.result = adapter.SendResult{Outcome: "unknown", NativeDisposition: model.DispositionUnknown}
+	out, err := svc.Send(context.Background(), SendInput{RecipientAlias: "worker", Body: "hello"})
+	if model.Code(err) != model.ErrUnknownSubmission {
+		t.Fatalf("send err=%v", err)
+	}
+	before := fa.callCount()
+	_, err = svc.Retry(context.Background(), RetryInput{MessageID: out.Message.ID})
+	if model.Code(err) != model.ErrPolicyRefused {
+		t.Fatalf("retry err=%v", err)
+	}
+	if fa.callCount() != before {
+		t.Fatal("retry without duplicate-risk acceptance reached the adapter")
+	}
+}
+
+func TestRetryOnlyUnknownOutcome(t *testing.T) {
+	svc, fa, _ := setup(t, "fake", false)
+	out, err := svc.Send(context.Background(), SendInput{RecipientAlias: "worker", Body: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fa.callCount()
+	_, err = svc.Retry(context.Background(), RetryInput{MessageID: out.Message.ID, AcceptDuplicateRisk: true})
+	if model.Code(err) != model.ErrPolicyRefused {
+		t.Fatalf("retry err=%v", err)
+	}
+	if fa.callCount() != before {
+		t.Fatal("retry of a submitted message reached the adapter")
+	}
+}
+
+func TestRetrySendsNewMessage(t *testing.T) {
+	svc, fa, _ := setup(t, "fake", false)
+	fa.result = adapter.SendResult{Outcome: "unknown", NativeDisposition: model.DispositionUnknown}
+	first, err := svc.Send(context.Background(), SendInput{RecipientAlias: "worker", Body: "hello", IdempotencyKey: "k-first"})
+	if model.Code(err) != model.ErrUnknownSubmission {
+		t.Fatalf("send err=%v", err)
+	}
+	fa.result = adapter.SendResult{Outcome: "submitted", NativeDisposition: model.DispositionQueued, NativeSubmissionID: "native-2"}
+
+	second, err := svc.Retry(context.Background(), RetryInput{
+		MessageID:           first.Message.ID,
+		AcceptDuplicateRisk: true,
+		IdempotencyKey:      "k-retry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Message.RetryOf != first.Message.ID {
+		t.Fatalf("retry_of=%q want %q", second.Message.RetryOf, first.Message.ID)
+	}
+	if second.Message.ConversationID != first.Message.ConversationID || second.Message.Body != first.Message.Body {
+		t.Fatalf("retry changed the conversation or body: %+v", second.Message)
+	}
+	if fa.callCount() != 2 {
+		t.Fatalf("adapter calls=%d", fa.callCount())
+	}
+	fa.mu.Lock()
+	retryReq := fa.reqs[1]
+	fa.mu.Unlock()
+	if retryReq.RetryOf != first.Message.ID || retryReq.Body != "hello" {
+		t.Fatalf("retry request=%+v", retryReq)
+	}
+
+	rec, err := svc.Read(first.Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.Message.RetriedBy) != 1 || rec.Message.RetriedBy[0] != second.Message.ID {
+		t.Fatalf("retried_by=%v", rec.Message.RetriedBy)
+	}
+	found := false
+	for _, ev := range rec.Events {
+		if ev.Kind == "retry_authorized" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no retry_authorized event: %+v", rec.Events)
+	}
+	conv, err := svc.ShowConversationForTest(first.Message.ConversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.SpentCount != 2 {
+		t.Fatalf("spent=%d", conv.SpentCount)
+	}
+}
+
+func TestRetryTargetChanged(t *testing.T) {
+	svc, fa, sess := setup(t, "fake", false)
+	fa.result = adapter.SendResult{Outcome: "unknown", NativeDisposition: model.DispositionUnknown}
+	first, err := svc.Send(context.Background(), SendInput{RecipientAlias: "worker", Body: "hello"})
+	if model.Code(err) != model.ErrUnknownSubmission {
+		t.Fatalf("send err=%v", err)
+	}
+	st, err := store.Open(config.DBPath(svc.Home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := st.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated.Target.NativeSessionID = "n2"
+	if err := st.PutSession(updated); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	before := fa.callCount()
+	_, err = svc.Retry(context.Background(), RetryInput{MessageID: first.Message.ID, AcceptDuplicateRisk: true})
+	if model.Code(err) != model.ErrTargetUnavailable {
+		t.Fatalf("retry err=%v", err)
+	}
+	if fa.callCount() != before {
+		t.Fatal("changed target was silently retried")
+	}
+}
+
+func TestRetryUnregisteredTarget(t *testing.T) {
+	svc, fa, sess := setup(t, "fake", false)
+	fa.result = adapter.SendResult{Outcome: "unknown", NativeDisposition: model.DispositionUnknown}
+	first, err := svc.Send(context.Background(), SendInput{RecipientAlias: "worker", Body: "hello"})
+	if model.Code(err) != model.ErrUnknownSubmission {
+		t.Fatalf("send err=%v", err)
+	}
+	st, err := store.Open(config.DBPath(svc.Home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UnregisterSession(sess.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+	if _, err := svc.Retry(context.Background(), RetryInput{MessageID: first.Message.ID, AcceptDuplicateRisk: true}); model.Code(err) != model.ErrTargetUnavailable {
+		t.Fatalf("retry err=%v", err)
+	}
+}
+
+func TestRetryIsIdempotent(t *testing.T) {
+	svc, fa, _ := setup(t, "fake", false)
+	fa.result = adapter.SendResult{Outcome: "unknown", NativeDisposition: model.DispositionUnknown}
+	first, err := svc.Send(context.Background(), SendInput{RecipientAlias: "worker", Body: "hello"})
+	if model.Code(err) != model.ErrUnknownSubmission {
+		t.Fatalf("send err=%v", err)
+	}
+	fa.result = adapter.SendResult{Outcome: "submitted", NativeDisposition: model.DispositionQueued}
+	in := RetryInput{MessageID: first.Message.ID, AcceptDuplicateRisk: true, IdempotencyKey: "k-retry"}
+	second, err := svc.Retry(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dup, err := svc.Retry(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dup.Duplicate || dup.Message.ID != second.Message.ID {
+		t.Fatalf("dup=%+v second=%+v", dup, second)
+	}
+	if fa.callCount() != 2 {
+		t.Fatalf("adapter calls=%d", fa.callCount())
+	}
+}

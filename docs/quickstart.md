@@ -88,6 +88,19 @@ amgo inbox
 amgo read <message-id>
 ```
 
+## Retrying an unknown outcome
+
+`unknown` is never retried automatically. If the operator accepts that the
+original submission may already have reached the target, resend it explicitly:
+
+```sh
+amgo retry <message-id> --accept-duplicate-risk
+```
+
+The retry reuses the stored body and conversation, creates a new message with
+`retry_of` set, and records `retried_by` on the original. It refuses messages
+that are not `unknown`.
+
 ## Conversations and budgets
 
 A bare send creates a one-shot conversation with a four-message, one-hour
