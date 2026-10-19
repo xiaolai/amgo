@@ -642,27 +642,18 @@ type codexGate struct {
 	closed  bool
 }
 
-func startCodex(t *testing.T) *codexGate {
+// codexDisposableHome copies the local Codex credentials into a private home
+// so no personal session or history is touched.
+func codexDisposableHome(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("codex"); err != nil {
-		t.Skip("codex binary is unavailable")
-	}
 	auth := filepath.Join(os.Getenv("HOME"), ".codex", "auth.json")
 	rawAuth, err := os.ReadFile(auth)
 	if err != nil {
 		t.Skipf("no disposable Codex credentials available: %v", err)
 	}
-	base := t.TempDir()
-	home := filepath.Join(base, "codex")
-	work := filepath.Join(base, "work")
+	home := filepath.Join(t.TempDir(), "codex")
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatal(err)
-	}
-	if err := os.MkdirAll(work, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command("git", "-C", work, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
 	}
 	if err := os.WriteFile(filepath.Join(home, "auth.json"), rawAuth, 0o600); err != nil {
 		t.Fatal(err)
@@ -674,6 +665,31 @@ func startCodex(t *testing.T) *codexGate {
 	cfg := fmt.Sprintf("model = %q\nmodel_provider = \"openai\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\n", modelName)
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		out, _ := exec.Command("pgrep", "-f", home+"/packages/app-server-daemon").Output()
+		for _, field := range strings.Fields(string(out)) {
+			if pid, err := strconv.Atoi(field); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGTERM)
+			}
+		}
+	})
+	return home
+}
+
+func startCodex(t *testing.T) *codexGate {
+	t.Helper()
+	if _, err := exec.LookPath("codex"); err != nil {
+		t.Skip("codex binary is unavailable")
+	}
+	base := t.TempDir()
+	home := codexDisposableHome(t)
+	work := filepath.Join(base, "work")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", work, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
 	}
 
 	g := &codexGate{home: home, work: work}
@@ -1102,5 +1118,222 @@ func TestClaudeBusyQueue(t *testing.T) {
 	mustOK(t, e, code, "busy send")
 	if !g.waitTranscript("ACK "+nonce, 150*time.Second) {
 		t.Fatal("busy session did not deliver the nonce")
+	}
+}
+
+// ---- owned job gates ----
+
+func runAmgoEnv(t *testing.T, env []string, args ...string) (int, []byte) {
+	t.Helper()
+	cmd := exec.Command(amgoBin, args...)
+	cmd.Env = append(os.Environ(), env...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	code := 0
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			code = ee.ExitCode()
+		} else {
+			t.Fatalf("run %v: %v", args, err)
+		}
+	}
+	if code != 0 {
+		t.Logf("amgo %v exit=%d stderr=%s", args, code, strings.TrimSpace(stderr.String()))
+	}
+	return code, stdout.Bytes()
+}
+
+func amgoData(t *testing.T, raw []byte) map[string]any {
+	t.Helper()
+	var env struct {
+		Data  map[string]any `json:"data"`
+		Error map[string]any `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("invalid amgo JSON %q: %v", raw, err)
+	}
+	if env.Data == nil {
+		t.Fatalf("envelope has no data: %s", raw)
+	}
+	return env.Data
+}
+
+func jobDataString(t *testing.T, d map[string]any, key string) string {
+	t.Helper()
+	v, _ := d[key].(string)
+	return v
+}
+
+func waitJobState(t *testing.T, env []string, home, id string, want map[string]bool, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		code, raw := runAmgoEnv(t, env, "--home", home, "--json", "status", id)
+		if code != 0 {
+			t.Fatalf("status %s exit=%d: %s", id, code, raw)
+		}
+		d := amgoData(t, raw)
+		state := jobDataString(t, d, "state")
+		if want[state] {
+			return d
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("job %s did not reach %v", id, want)
+	return nil
+}
+
+func terminalJob(t *testing.T, env []string, home, id string, timeout time.Duration) map[string]any {
+	t.Helper()
+	return waitJobState(t, env, home, id, map[string]bool{
+		"completed": true, "partial": true, "needs_action": true, "failed": true,
+		"timed_out": true, "cancelled": true, "interrupted": true, "unknown": true,
+	}, timeout)
+}
+
+func TestCodexJobContinuationAndCancel(t *testing.T) {
+	codexHome := codexDisposableHome(t)
+	env := []string{"CODEX_HOME=" + codexHome}
+	ws := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	home := t.TempDir()
+	nonce1 := "CODEX-JOB-" + ids.NewUUID()
+
+	code, raw := runAmgoEnv(t, env, "--home", home, "--json", "run", "codex", "--cwd", ws,
+		"--text", "Reply with exactly "+nonce1+" and nothing else.", "--background", "--deadline", "3m")
+	if code != 0 {
+		t.Fatalf("run exit=%d: %s", code, raw)
+	}
+	first := amgoData(t, raw)
+	firstID := jobDataString(t, first, "job_id")
+	done := terminalJob(t, env, home, firstID, 3*time.Minute)
+	if jobDataString(t, done, "state") != "completed" || !strings.Contains(jobDataString(t, done, "result"), nonce1) {
+		t.Fatalf("first job=%v", done)
+	}
+	native := jobDataString(t, done, "native_session_id")
+	if native == "" {
+		t.Fatalf("first job has no native session: %v", done)
+	}
+
+	nonce2 := "CODEX-CONT-" + ids.NewUUID()
+	code, raw = runAmgoEnv(t, env, "--home", home, "--json", "continue", firstID,
+		"--text", "Reply with exactly "+nonce2+" and nothing else.", "--background", "--deadline", "3m")
+	if code != 0 {
+		t.Fatalf("continue exit=%d: %s", code, raw)
+	}
+	secondID := jobDataString(t, amgoData(t, raw), "job_id")
+	second := terminalJob(t, env, home, secondID, 3*time.Minute)
+	if jobDataString(t, second, "state") != "completed" ||
+		!strings.Contains(jobDataString(t, second, "result"), nonce2) ||
+		jobDataString(t, second, "native_session_id") != native ||
+		jobDataString(t, second, "resume_of") != firstID {
+		t.Fatalf("continued job=%v", second)
+	}
+
+	code, raw = runAmgoEnv(t, env, "--home", home, "--json", "run", "codex", "--cwd", ws,
+		"--text", "Run the shell command sleep 53, wait for it to finish, then reply DONE. Do nothing else.",
+		"--background", "--deadline", "2m")
+	if code != 0 {
+		t.Fatalf("slow run exit=%d: %s", code, raw)
+	}
+	slowID := jobDataString(t, amgoData(t, raw), "job_id")
+	waitJobState(t, env, home, slowID, map[string]bool{"running": true}, 60*time.Second)
+	code, raw = runAmgoEnv(t, env, "--home", home, "--json", "run", "codex", "--cwd", ws,
+		"--text", "Reply OK.", "--deadline", "1m")
+	if code != 10 || !strings.Contains(string(raw), "workspace_busy") {
+		t.Fatalf("second job on the same checkout exit=%d: %s", code, raw)
+	}
+	code, raw = runAmgoEnv(t, env, "--home", home, "--json", "cancel", slowID, "--grace", "5s")
+	if code != 0 {
+		t.Fatalf("cancel exit=%d: %s", code, raw)
+	}
+	cancelled := terminalJob(t, env, home, slowID, 30*time.Second)
+	if jobDataString(t, cancelled, "state") != "cancelled" {
+		t.Fatalf("cancel state=%v", cancelled)
+	}
+	time.Sleep(time.Second)
+	if out, err := exec.Command("pgrep", "-f", "sleep 53").Output(); err == nil && len(bytes.TrimSpace(out)) > 0 {
+		_ = exec.Command("pkill", "-f", "sleep 53").Run()
+		t.Fatalf("cancelled job left its sandbox command running: %s", out)
+	}
+}
+
+func TestClaudeJobContinuation(t *testing.T) {
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("claude binary is unavailable")
+	}
+	env := []string{"CLAUDE_CONFIG_DIR=" + t.TempDir()}
+	ws := t.TempDir()
+	home := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	nonce1 := "CLAUDE-JOB-" + ids.NewUUID()
+	code, raw := runAmgoEnv(t, env, "--home", home, "--json", "run", "claude", "--cwd", ws,
+		"--text", "Reply with exactly "+nonce1+" and nothing else.", "--background", "--deadline", "3m")
+	if code != 0 {
+		t.Fatalf("run exit=%d: %s", code, raw)
+	}
+	firstID := jobDataString(t, amgoData(t, raw), "job_id")
+	first := terminalJob(t, env, home, firstID, 3*time.Minute)
+	if jobDataString(t, first, "state") != "completed" ||
+		!strings.Contains(jobDataString(t, first, "result"), nonce1) {
+		t.Fatalf("first job=%v", first)
+	}
+	native := jobDataString(t, first, "native_session_id")
+	nonce2 := "CLAUDE-CONT-" + ids.NewUUID()
+	code, raw = runAmgoEnv(t, env, "--home", home, "--json", "continue", firstID,
+		"--text", "Reply with exactly "+nonce2+" and nothing else.", "--background", "--deadline", "3m")
+	if code != 0 {
+		t.Fatalf("continue exit=%d: %s", code, raw)
+	}
+	secondID := jobDataString(t, amgoData(t, raw), "job_id")
+	second := terminalJob(t, env, home, secondID, 3*time.Minute)
+	if jobDataString(t, second, "state") != "completed" ||
+		!strings.Contains(jobDataString(t, second, "result"), nonce2) ||
+		jobDataString(t, second, "native_session_id") != native {
+		t.Fatalf("continued job=%v", second)
+	}
+}
+
+func TestOpenCodeJobContinuation(t *testing.T) {
+	if _, err := exec.LookPath("opencode"); err != nil {
+		t.Skip("opencode binary is unavailable")
+	}
+	ws := t.TempDir()
+	home := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	nonce1 := "OPENCODE-JOB-" + ids.NewUUID()
+	code, raw := runAmgoEnv(t, nil, "--home", home, "--json", "run", "opencode", "--cwd", ws,
+		"--text", "Reply with exactly "+nonce1+" and nothing else.", "--background", "--deadline", "3m")
+	if code != 0 {
+		t.Fatalf("run exit=%d: %s", code, raw)
+	}
+	firstID := jobDataString(t, amgoData(t, raw), "job_id")
+	first := terminalJob(t, nil, home, firstID, 3*time.Minute)
+	if jobDataString(t, first, "state") != "completed" ||
+		!strings.Contains(jobDataString(t, first, "result"), nonce1) {
+		t.Fatalf("first job=%v", first)
+	}
+	native := jobDataString(t, first, "native_session_id")
+	nonce2 := "OPENCODE-CONT-" + ids.NewUUID()
+	code, raw = runAmgoEnv(t, nil, "--home", home, "--json", "continue", firstID,
+		"--text", "Reply with exactly "+nonce2+" and nothing else.", "--background", "--deadline", "3m")
+	if code != 0 {
+		t.Fatalf("continue exit=%d: %s", code, raw)
+	}
+	secondID := jobDataString(t, amgoData(t, raw), "job_id")
+	second := terminalJob(t, nil, home, secondID, 3*time.Minute)
+	if jobDataString(t, second, "state") != "completed" ||
+		!strings.Contains(jobDataString(t, second, "result"), nonce2) ||
+		jobDataString(t, second, "native_session_id") != native {
+		t.Fatalf("continued job=%v", second)
 	}
 }

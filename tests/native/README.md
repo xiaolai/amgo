@@ -1,7 +1,7 @@
 # Native delivery gates
 
-These tests exercise real Claude Code and Codex sessions. They are opt-in and
-never run in the default suite.
+These tests exercise real Claude Code, Codex and OpenCode sessions and jobs.
+They are opt-in and never run in the default suite.
 
 ```sh
 AMGO_NATIVE=1 go test -tags native -count=1 -timeout 20m ./tests/native -v
@@ -36,6 +36,9 @@ skip when `claude` or `tmux` is unavailable.
 | Codex dead endpoint | `TestCodexDeadTarget` | Stopping the disposable daemon makes new sends `target_unavailable`; replay remains idempotent |
 | Interrupt during write | `TestClaudeInterruptDuringWriteIsUnknown` | A blocked frame interrupted by cancellation is `unknown` with `ErrInterrupted`, never `failed_before_submit` |
 | Persistence after acceptance | `TestStoreDiskFullReportsOutcomeUnpersisted` | A post-acceptance write failure returns `outcome_unpersisted` with identifiers and a journal record |
+| Codex job / continue / cancel | `TestCodexJobContinuationAndCancel` | A background `codex exec` job completes with a nonce; continuation reuses the same native thread; a second job on the checkout is `workspace_busy`; cancellation kills the sandbox's `sleep` command, not just the leader |
+| Claude job / continue | `TestClaudeJobContinuation` | A headless `claude -p` job completes with a nonce; continuation reuses the same session ID |
+| OpenCode job / continue | `TestOpenCodeJobContinuation` | A locally owned `opencode run` job completes with a nonce; `--session` continuation reuses the same session |
 
 ## Gates that remain manual
 
@@ -55,3 +58,8 @@ cannot force reliably. Keep the code guards and record evidence when run.
 4. **ABA thread reload.** The Codex client cannot distinguish a thread that
    reloaded between the loaded check and the queue call. This is documented as
    an accepted limitation; no test can prove its absence.
+5. **agy structured job.** The installed 1.4.2 exposes structured stream-json,
+   but the current account is not eligible in this location. The job lane stays
+   disabled until a native result with a nonce is captured.
+6. **Qwen job and peer messaging.** The binary is absent. No flag or protocol
+   claim is made until an installed, pinned version passes a native gate.
