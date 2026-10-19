@@ -1,7 +1,7 @@
 # amgo
 
 Native session messaging and owned jobs for existing Claude Code, Codex,
-OpenCode and Qwen sessions.
+OpenCode and Qwen sessions, plus a documented-only ACP agent client.
 
 [![ci](https://github.com/xiaolai/amgo/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaolai/amgo/actions/workflows/ci.yml)
 
@@ -26,7 +26,7 @@ implemented from official protocols but are documented-only: they require
   response came back, the attempt is `unknown` and is never retried
   automatically.
 - **No idle daemon.** State is a local bbolt database opened for the length of a
-  command. No amgo process survives a bounded command or wait.
+  command. No amgo process survives a bounded command, wait or job.
 - **The provider remains the authority.** Native holds, refusals and permission
   rules are not bypassed or second-guessed.
 
@@ -77,6 +77,10 @@ amgo cancel <job-id>
 The prompt is read from stdin or a file and passed to the provider on stdin, so
 it does not appear in the process list. The provider's own permission rules and
 sandbox apply; amgo never adds a bypass flag.
+
+OpenCode, Qwen, agy and ACP recipes are in the
+[quickstart](docs/quickstart.md). Qwen, agy and ACP are documented-only: they
+refuse to run without `--admit-experimental` and are not native-certified.
 
 `--accept-unknown-delivery` is required once per Claude target: an external
 sender cannot observe native holds or refusals. The acknowledgement is
@@ -130,7 +134,7 @@ state is not `unknown`.
   eligibility.
 - An ACP v1 agent for `run acp`, supplied explicitly with `--acp-command`;
   documented-only and not certified.
-- macOS or Linux. Windows is not supported in v0.2.
+- macOS or Linux. Windows is not supported in v0.4.
 - The same OS user as the target session. That user boundary is the trust
   boundary; amgo is not an authorization or sandbox boundary.
 - Go 1.26+ only when building from source.
@@ -153,7 +157,7 @@ state is not `unknown`.
 | `conversation` | Create, show or close a named budget |
 | `export`, `prune` | JSONL export and explicit retention |
 | `recover` | Reconcile dead attempts and import the outcome journal |
-| `run` | Start an owned Claude, Codex or OpenCode job in a workspace |
+| `run` | Start an owned job: Claude, Codex, OpenCode, or a documented-only Qwen, agy or ACP agent |
 | `jobs`, `status`, `follow` | List jobs, inspect evidence and wait for new events |
 | `result` | Read a terminal job's result and bounded log artifact |
 | `cancel` | Request cancellation and confirm process-group exit |
@@ -178,23 +182,42 @@ I/O, then closes the database during transport. The outcome is recorded in a
 short transaction; a write failure after native acceptance is reported as
 `outcome_unpersisted`, not as a retry-safe error.
 
+A job follows the same rule: persist the job and its workspace lease first,
+close the database, run one provider process in its own process group, stream
+bounded output to a private log, then record terminal evidence. A dead
+supervisor leaves `interrupted` or `unknown`, never `completed`.
+
 See the [quickstart](docs/quickstart.md) for the full command flow and
 [security notes](docs/security.md) for the trust model.
 
 ## Agent use
 
-`skills/amgo/SKILL.md` is a conservative skill for Claude Code and Codex. It
-may be invoked only when the user explicitly asks to use amgo, and it stops on
-an unknown outcome instead of retrying. `agents/openai.yaml` disables implicit
-invocation in Codex. Agents without skill support can use the `AGENTS.md`
-block in [agent usage](docs/agent-usage.md).
+`skills/amgo/SKILL.md` is a conservative skill for Claude Code, Codex and
+other skill-aware agents. It covers messaging and jobs, is invoked only when
+the user explicitly asks for that exact action, stops on an unknown outcome,
+and refuses to start jobs or change policy from peer content. It grants only
+`Bash(amgo:*)`; `agents/openai.yaml` disables implicit invocation in Codex.
+Agents without skill support can use the `AGENTS.md` block in
+[agent usage](docs/agent-usage.md).
+
+Install it under the agent's personal config:
+
+```sh
+# Claude Code (both default and any CLAUDE_CONFIG_DIR profile)
+install -d -m 0755 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/amgo"
+install -m 0644 skills/amgo/SKILL.md "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/amgo/SKILL.md"
+
+# Codex
+install -d -m 0755 "${CODEX_HOME:-$HOME/.codex}/skills/amgo"
+install -m 0644 skills/amgo/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/amgo/SKILL.md"
+```
 
 A skill is instructions, not a permission system. Install it only in a trusted
 config, and keep amgo's state root owner-only.
 
 ## Status
 
-| Area | v0.1.2 |
+| Area | v0.4.0 |
 |---|---|
 | One CGO-free Go binary | implemented |
 | Versioned JSON envelope and stable exit codes | implemented |
@@ -239,6 +262,14 @@ config, and keep amgo's state root owner-only.
   denied or turn-limited run is `needs_action` or `partial`, never `completed`.
 - Codex resume inherits the stopped session's sandbox, so a `--policy review`
   continuation is refused rather than silently downgraded.
+- Qwen registry tokens are read just in time and never stored or logged. Its
+  receipts are observed for a short bounded window; no receipt means
+  unverified. On non-Linux systems PID reuse is not distinguishable.
+- OpenCode needs an explicit loopback endpoint; the TUI's random port has no
+  documented discovery file. HTTP 204 is acceptance, not delivery.
+- ACP disables client filesystem and terminal capabilities, rejects every
+  permission request, and never auto-authenticates. It has fake-agent fixtures
+  only; no real ACP agent is installed or certified here.
 - No amgo process survives a bounded command or job. There is no always-on
   daemon.
 - State is local and owner-only (0700/0600). It is not encrypted at rest; the
@@ -262,9 +293,9 @@ make perf                         # startup, send cycle, contention, RSS, proces
 AMGO_CONTENTION=1 go test ./internal/store -run TestContentionMultiProcess -count=1
 ```
 
-The native delivery gates are opt-in. They launch disposable Claude and Codex
-sessions in private homes, never a personal session, and may spend model
-tokens:
+The native delivery gates are opt-in. They launch disposable Claude, Codex and
+OpenCode sessions and jobs in private homes, never a personal session, and may
+spend model tokens:
 
 ```sh
 AMGO_NATIVE=1 make native
@@ -278,5 +309,5 @@ ISC. See [LICENSE](LICENSE). Third-party modules and their full license texts
 are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); release
 archives include both files.
 
-amgo is not affiliated with Anthropic or OpenAI. Claude Code and Codex are
-products of their respective owners.
+amgo is not affiliated with any provider. Claude Code, Codex, OpenCode, Qwen
+and Antigravity are products of their respective owners.
