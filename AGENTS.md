@@ -60,7 +60,10 @@ The public tree is the tracked set. Before any push, run `make secrets`; it
 scans tracked and untracked non-ignored files plus the full Git history with
 the project rules in `.gitleaks.toml`. Never commit `.env`, `auth.json`, key
 files, `dev-docs/`, `.cc-suite/` or agent state, and never use `git add -f` on
-an ignored path. See `docs/publishing.md`.
+an ignored path. See `dev-docs/publishing.md`.
+
+A new or upgraded dependency requires a row and its full license text in
+`THIRD-PARTY-NOTICES.md`; `make license-check` fails otherwise.
 
 ## Layout
 

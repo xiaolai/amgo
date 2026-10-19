@@ -202,6 +202,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 make secrets                      # publication-set and history secret scan
+make license-check                # every used module is in THIRD-PARTY-NOTICES.md
 make perf                         # startup, send cycle, contention, RSS, process count
 AMGO_CONTENTION=1 go test ./internal/store -run TestContentionMultiProcess -count=1
 ```
@@ -218,7 +219,9 @@ See `tests/native/README.md` for the gate matrix and the manual remainder.
 
 ## License
 
-ISC. See [LICENSE](LICENSE).
+ISC. See [LICENSE](LICENSE). Third-party modules and their full license texts
+are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); release
+archives include both files.
 
 amgo is not affiliated with Anthropic or OpenAI. Claude Code and Codex are
 products of their respective owners.

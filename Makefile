@@ -1,4 +1,4 @@
-.PHONY: build test race vet bench fmt contention lifecycle native secrets release release-check vulncheck perf
+.PHONY: build test race vet bench fmt contention lifecycle native secrets license-check release release-check vulncheck perf
 
 VERSION ?= 0.1.1
 LDFLAGS := -s -w -X amgo/internal/version.Version=$(VERSION)
@@ -31,6 +31,9 @@ native:
 
 secrets:
 	./scripts/secret-scan.sh
+
+license-check:
+	./scripts/license-check.sh
 
 release:
 	VERSION='$(VERSION)' ./scripts/build-release.sh

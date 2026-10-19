@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Packs each release binary in dist/ into amgo-<os>-<arch>.tar.gz with the LICENSE and
-# README (REL-03), then rewrites dist/SHA256SUMS. Run it after scripts/sign-notarize.sh:
+# Packs each release binary in dist/ into amgo-<os>-<arch>.tar.gz with the LICENSE,
+# README and third-party notices (REL-03), then rewrites dist/SHA256SUMS. Run it after
+# scripts/sign-notarize.sh:
 # tar keeps the signed darwin binaries byte for byte, and the archive keeps the
 # executable bit, which a bare-binary download loses.
 #
@@ -45,13 +46,14 @@ for platform in darwin-arm64 darwin-amd64 linux-arm64 linux-amd64; do
 	stage="${staging}/${platform}"
 	mkdir -- "$stage"
 	cp -- "$bin" "${stage}/amgo"
-	cp -- LICENSE README.md "${stage}/"
+	cp -- LICENSE README.md THIRD-PARTY-NOTICES.md "${stage}/"
 	# No "--": macOS chmod rejects it, and these paths are absolute.
 	chmod 0755 "${stage}/amgo"
-	chmod 0644 "${stage}/LICENSE" "${stage}/README.md"
-	TZ=UTC touch -t 200001010000 -- "${stage}/amgo" "${stage}/LICENSE" "${stage}/README.md"
+	chmod 0644 "${stage}/LICENSE" "${stage}/README.md" "${stage}/THIRD-PARTY-NOTICES.md"
+	TZ=UTC touch -t 200001010000 -- "${stage}/amgo" "${stage}/LICENSE" "${stage}/README.md" "${stage}/THIRD-PARTY-NOTICES.md"
 	# COPYFILE_DISABLE keeps macOS tar from adding ._ AppleDouble files.
-	COPYFILE_DISABLE=1 tar "${tar_flags[@]}" -cf - -C "$stage" amgo LICENSE README.md |
+	COPYFILE_DISABLE=1 tar "${tar_flags[@]}" -cf - -C "$stage" \
+		amgo LICENSE README.md THIRD-PARTY-NOTICES.md |
 		gzip -n -9 >"${dist}/amgo-${platform}.tar.gz"
 	echo "packed ${dist}/amgo-${platform}.tar.gz"
 done

@@ -91,6 +91,12 @@ if ! go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...; then
 	vuln_result="FAIL"
 fi
 
+license_result="PASS"
+echo "== license inventory"
+if ! ./scripts/license-check.sh; then
+	license_result="FAIL"
+fi
+
 native_result="SKIPPED"
 if [ "${AMGO_SKIP_NATIVE:-}" != "1" ]; then
 	native_log="${dist}/native-gates-$(date -u +%Y%m%dT%H%M%SZ).log"
@@ -116,13 +122,14 @@ report="${dist}/release-check-${stamp}.md"
 		echo "- Release binary amgo-${platform} commit: ${head}"
 	done
 	echo "- Vulnerabilities: ${vuln_result}"
+	echo "- License inventory: ${license_result}"
 	echo "- Native gates: ${native_result}"
 	echo
-	if [ "$native_result" = "PASS" ] && [ "$vuln_result" = "PASS" ]; then
+	if [ "$native_result" = "PASS" ] && [ "$vuln_result" = "PASS" ] && [ "$license_result" = "PASS" ]; then
 		echo "Result: PASS"
 	else
 		echo "Result: FAIL"
 	fi
 } >"$report"
 cat "$report"
-[ "$native_result" = "PASS" ] && [ "$vuln_result" = "PASS" ] || exit 1
+[ "$native_result" = "PASS" ] && [ "$vuln_result" = "PASS" ] && [ "$license_result" = "PASS" ] || exit 1
