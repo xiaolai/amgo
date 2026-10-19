@@ -65,7 +65,13 @@ func TestMain(m *testing.M) {
 	if supplied := os.Getenv("AMGO_NATIVE_BIN"); supplied != "" {
 		// Release qualification must exercise the signed artifact, not a
 		// rebuilt binary with different linking and version metadata.
-		abs, err := filepath.Abs(supplied)
+		// go test runs with the package directory as its working directory, so
+		// a relative path is resolved against the repository root.
+		path := supplied
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(repoRoot, path)
+		}
+		abs, err := filepath.Abs(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "resolve AMGO_NATIVE_BIN: %v\n", err)
 			os.Exit(1)

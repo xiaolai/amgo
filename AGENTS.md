@@ -94,7 +94,9 @@ test in `tests/native/required.txt` must report `pass`, and a skip, failure,
 missing result, or a `-list` set that differs from the manifest fails the
 release. Update that manifest deliberately when the native gate set changes.
 The gates run the signed release binary through `AMGO_NATIVE_BIN`, not a
-separately built binary.
+separately built binary. A transport failure fetching `vuln.go.dev` falls back
+to the Go team's public `storage.googleapis.com/go-vulndb` bucket; the report
+records the source and its last-modified date.
 
 ## Layout
 

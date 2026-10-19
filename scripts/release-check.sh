@@ -86,10 +86,30 @@ out="$("$native_bin" version)" || {
 checked_sha="$(sha_of "$native_bin")"
 
 vuln_result="PASS"
+vuln_source="vuln.go.dev"
+vuln_mirror_date=""
 echo "== govulncheck"
-if ! go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...; then
-	vuln_result="FAIL"
+vuln_log="${dist}/govulncheck-$(date -u +%Y%m%dT%H%M%SZ).log"
+run_govuln() {
+	go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 "$@"
+}
+if ! run_govuln ./... >"$vuln_log" 2>&1; then
+	# A blocked vuln.go.dev is a transport failure, not a vulnerability
+	# finding. Fall back to the Go team's public database bucket and record
+	# the source and its build date in the report.
+	if grep -q 'fetching vulnerabilities' "$vuln_log"; then
+		vuln_source="storage.googleapis.com/go-vulndb (official mirror)"
+		vuln_mirror_date="$(curl -sSI --max-time 15 \
+			https://storage.googleapis.com/go-vulndb/index/modules.json.gz 2>/dev/null |
+			sed -n 's/^last-modified: //Ip' | tr -d '\r')"
+		if ! run_govuln -db https://storage.googleapis.com/go-vulndb ./... >>"$vuln_log" 2>&1; then
+			vuln_result="FAIL"
+		fi
+	else
+		vuln_result="FAIL"
+	fi
 fi
+cat "$vuln_log"
 
 license_result="PASS"
 echo "== license inventory"
@@ -157,7 +177,7 @@ report="${dist}/release-check-${stamp}.md"
 		echo "- Release binary amgo-${platform} sha256: $(sha_of "$bin")"
 		echo "- Release binary amgo-${platform} commit: ${head}"
 	done
-	echo "- Vulnerabilities: ${vuln_result}"
+	echo "- Vulnerabilities: ${vuln_result} (${vuln_source}${vuln_mirror_date:+, last-modified ${vuln_mirror_date}})"
 	echo "- License inventory: ${license_result}"
 	echo "- Native gates: ${native_result}"
 	echo "- Native gates binary: ${native_bin_note}"
