@@ -30,6 +30,8 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 			"structured stream-json exists in 1.4.2, but the current account is not eligible in this location",
 			"the job lane is refused until a native structured result is verified",
 			"legacy text-only output is diagnostic and is not parsed as completion",
+			"headless stream-json and --conversation are implemented from the official CLI docs",
+			"the job lane is documented-only and requires --admit-experimental",
 		},
 	}
 	out, err := exec.CommandContext(ctx, "agy", "--version").Output()
@@ -40,6 +42,8 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 	if v := strings.TrimSpace(string(out)); v != "" {
 		caps.TestedVersions = []string{v}
 	}
+	caps.Jobs = true
+	caps.Resume = true
 	return caps, nil
 }
 
