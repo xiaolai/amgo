@@ -13,6 +13,11 @@ import (
 	"amgo/internal/model"
 )
 
+// contentionOpenTimeout is deliberately wider than the production default.
+// This test asserts serialization correctness, not a two-second latency bound;
+// CI can deschedule a worker past the default while another holds the lock.
+const contentionOpenTimeout = 10 * time.Second
+
 // TestContentionChild is the worker side of the multi-process test. It is a
 // no-op unless the parent supplies AMGO_CONTENTION_DB.
 func TestContentionChild(t *testing.T) {
@@ -23,7 +28,7 @@ func TestContentionChild(t *testing.T) {
 	conv := os.Getenv("AMGO_CONTENTION_CONV")
 	prefix := os.Getenv("AMGO_CONTENTION_PREFIX")
 	n, _ := strconv.Atoi(os.Getenv("AMGO_CONTENTION_N"))
-	st, err := Open(db, 2*time.Second)
+	st, err := Open(db, contentionOpenTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +67,7 @@ func TestContentionMultiProcess(t *testing.T) {
 	}
 	dir := t.TempDir()
 	db := filepath.Join(dir, "state.db")
-	st, err := Open(db, 2*time.Second)
+	st, err := Open(db, contentionOpenTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +104,7 @@ func TestContentionMultiProcess(t *testing.T) {
 			t.Fatalf("worker %d: %v\n%s", i, err, outs[i].String())
 		}
 	}
-	st, err = Open(db, 2*time.Second)
+	st, err = Open(db, contentionOpenTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}
