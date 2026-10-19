@@ -38,9 +38,33 @@ rss_cmd() {
 		printf '%-14s %s KiB\n' "$label" "$(awk -F': ' '/Maximum resident set size/ {print $2}' <<<"$out")"
 	fi
 }
+# doctor spawns provider --version probes whose RSS is not amgo's. Sample the
+# amgo process itself, then report the total separately.
+rss_parent() {
+	local label="$1"
+	shift
+	"$@" >/dev/null 2>&1 &
+	local pid=$! peak=0 rss
+	while kill -0 "$pid" 2>/dev/null; do
+		rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+		if [ -n "$rss" ] && [ "$rss" -gt "$peak" ]; then
+			peak=$rss
+		fi
+		sleep 0.005
+	done
+	wait "$pid"
+	printf '%-14s %s KiB (amgo process)\n' "$label" "$peak"
+}
 rss_cmd version "$bin" --home "$home" version
-rss_cmd "doctor" "$bin" --home "$home" doctor --state
+rss_parent doctor "$bin" --home "$home" doctor --state
 rss_cmd sessions "$bin" --home "$home" sessions
+if [ "$(uname -s)" = "Darwin" ]; then
+	out=$(/usr/bin/time -l "$bin" --home "$home" doctor --state 2>&1)
+	printf '%-14s %s bytes (including provider probes)\n' "doctor-total" "$(awk '/maximum resident set size/ {print $1}' <<<"$out")"
+else
+	out=$(/usr/bin/time -v "$bin" --home "$home" doctor --state 2>&1)
+	printf '%-14s %s KiB (including provider probes)\n' "doctor-total" "$(awk -F': ' '/Maximum resident set size/ {print $2}' <<<"$out")"
+fi
 
 echo "== residual amgo processes"
 if pgrep -f "$bin" >/dev/null 2>&1; then
