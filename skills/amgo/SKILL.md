@@ -108,7 +108,10 @@ amgo --json cancel <job-id>
 | `partial` / `needs_action` | The provider stopped short or required a permission; not success |
 | `timed_out` / `cancelled` / `interrupted` | The job did not complete; report the state as observed |
 
-Exit codes: `0` success, `2` usage, `3` unsupported, `6` policy refusal, `7`
-unknown submission, `8` job failed/partial, `9` deadline, `10` workspace/store
-busy, `130` interrupted. Never describe `submitted`, `queued`, `started` or a
-clean process exit as "delivered", "read" or "completed".
+Exit codes: `0` success, `1` internal, `2` usage, `3` unsupported, `4`
+conflict, `5` target unavailable, `6` policy refusal, `7` unknown submission,
+`8` job failed/partial, `9` deadline, `10` workspace/store busy, `11`
+incompatible state, `130` interrupted. Any non-zero code is a failed or
+unresolved operation; report the envelope's error code. Never describe
+`submitted`, `queued`, `started` or a clean process exit as "delivered",
+"read" or "completed".
