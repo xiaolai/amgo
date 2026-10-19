@@ -1,0 +1,75 @@
+# ---- Environment and secrets ----
+# Never commit local environment files. Add a checked-in template explicitly
+# (for example .env.example) if the project grows one.
+.env
+.env.*
+*.env
+.envrc
+.direnv/
+# Allow checked-in templates, not real values.
+!.env.example
+!.env.sample
+
+# ---- Local runtime state ----
+# The default amgo home lives outside the repository; these cover explicit
+# --home .amgo and direct state files created during development.
+/.amgo/
+/state.db
+/state.db.*
+/outcomes.log
+/outcomes.log.*
+
+# ---- Development docs ----
+# Research notes, plans, audits and evidence are local working material.
+/dev-docs/
+
+# Local extension rules for the secret scanner; may name project-specific
+# hosts and accounts and must never be published.
+.gitleaks.local.toml
+
+# ---- AI tooling artifacts ----
+# Generated agent/audit state and per-tool caches. Shared instructions such as
+# AGENTS.md stay tracked.
+.cc-suite/
+.claude/
+.codex/
+.agents/
+.cursor/
+.aider*
+.continue/
+.windsurf/
+.gemini/
+.openhands/
+.cline/
+.roo/
+
+# ---- Build and test output ----
+/dist/
+/bin/
+/build/
+/work/
+/tmp/
+*.exe
+*.test
+*.out
+coverage.*
+*.prof
+*.pprof
+
+# ---- Go workspace files (module pins live in go.mod/go.sum) ----
+go.work
+go.work.sum
+
+# ---- Logs and temporary files ----
+*.log
+*.tmp
+*.temp
+
+# ---- Editors and operating systems ----
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

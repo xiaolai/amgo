@@ -1,0 +1,86 @@
+name: clean-mac
+
+# A macOS runner that never built amgo and holds no Developer ID downloads the
+# published release, marks the binary as a browser download, and runs it.
+# scripts/publish-release.sh dispatches this after each release:
+#   gh workflow run clean-mac.yml --repo xiaolai/amgo -f version=vX.Y.Z
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to check, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gatekeeper:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ inputs.version }}
+      ARCHIVE: amgo-darwin-${{ matrix.arch }}.tar.gz
+    steps:
+      - name: validate the version input
+        run: |
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "version must look like v1.2.3, got: $VERSION" >&2
+            exit 1
+          fi
+      - name: download the release archive and SHA256SUMS without a token
+        run: |
+          base="https://github.com/xiaolai/amgo/releases/download/${VERSION}"
+          curl --fail --silent --show-error --location --retry 5 -o "$ARCHIVE" "${base}/${ARCHIVE}"
+          curl --fail --silent --show-error --location --retry 5 -o SHA256SUMS "${base}/SHA256SUMS"
+      - name: verify the checksum
+        run: |
+          line="$(awk -v f="$ARCHIVE" '$2 == f' SHA256SUMS)"
+          test -n "$line"
+          printf '%s\n' "$line" > archive.sum
+          shasum -a 256 -c archive.sum
+      - name: extract and mark the binary as a browser download
+        run: |
+          tar -xzf "$ARCHIVE" amgo
+          xattr -w com.apple.quarantine "0081;$(printf %x "$(date +%s)");Safari;$(uuidgen)" amgo
+          xattr -p com.apple.quarantine amgo
+      - name: the quarantined binary runs and reports the release version
+        run: |
+          out="$(./amgo version)"
+          printf '%s\n' "$out"
+          want="amgo ${VERSION#v}"
+          if [ "$out" != "$want" ]; then
+            echo "version output is '${out}', want '${want}'" >&2
+            exit 1
+          fi
+      - name: the signature is valid with the hardened runtime
+        run: |
+          codesign --verify --strict --verbose=2 amgo
+          sig="$(codesign -dvvv amgo 2>&1)"
+          printf '%s\n' "$sig"
+          if ! grep -Eq 'flags=0x[0-9a-f]+\(runtime\)' <<<"$sig"; then
+            echo "no hardened runtime flag" >&2
+            exit 1
+          fi
+      - name: Gatekeeper accepts it as notarised
+        run: |
+          assessment="$(spctl -a -vvv -t install amgo 2>&1)"
+          printf '%s\n' "$assessment"
+          if ! grep -Fq 'source=Notarized Developer ID' <<<"$assessment"; then
+            echo "Gatekeeper does not report a notarised Developer ID" >&2
+            exit 1
+          fi

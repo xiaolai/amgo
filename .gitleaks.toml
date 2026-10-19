@@ -1,0 +1,29 @@
+# Project-specific rules on top of the gitleaks default set.
+#
+# The default rules cover known credential formats. These rules cover material
+# that is sensitive for this project even when it is not a recognizable token:
+# private network topology, internal host names and personal home paths.
+#
+# Run through scripts/secret-scan.sh, which scans only the publication set
+# (tracked files plus untracked files that are not ignored).
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "amgo-private-ipv4"
+description = "Private, link-local or CGNAT IPv4 address"
+regex = '''\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})\b'''
+tags = ["infra"]
+
+[[rules]]
+id = "amgo-personal-home-path"
+description = "Absolute personal home directory"
+regex = '''(?:/Users/|/home/)[A-Za-z0-9._-]+'''
+tags = ["personal"]
+
+[[rules]]
+id = "amgo-internal-hostname"
+description = "Hostname under an internal-only suffix"
+regex = '''(?i)\b[A-Za-z0-9][A-Za-z0-9._-]*\.(?:internal|lan|corp|intranet|home\.arpa)\b'''
+tags = ["infra"]
