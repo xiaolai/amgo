@@ -41,10 +41,13 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		TestedVersions:  []string{TestedVersion},
 		LiveMessaging:   false,
 		NativeReceipts:  true,
+		Jobs:            false,
+		Resume:          false,
 		Constraints: []string{
 			"app-server WebSocket transport and thread/queue/add are experimental and undocumented",
 			"the loaded target guard is best-effort; an ABA reload is possible",
 			"a send to an idle thread starts a turn and may spend tokens",
+			"jobs use codex exec --json; resume inherits the stopped session's sandbox",
 		},
 	}
 	out, err := exec.CommandContext(ctx, "codex", "--version").Output()
@@ -58,6 +61,9 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 	}
 	if sameMinor(v, TestedVersion) {
 		caps.LiveMessaging = true
+		caps.Jobs = true
+		caps.Resume = true
+		caps.Constraints = append(caps.Constraints, "jobs native-verified at 0.163.0 on macOS arm64")
 	} else {
 		caps.Constraints = append(caps.Constraints, "version is outside the tested minor release")
 	}

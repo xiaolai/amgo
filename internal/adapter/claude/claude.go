@@ -37,10 +37,14 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		TestedVersions:  []string{TestedVersion},
 		LiveMessaging:   false,
 		NativeReceipts:  false,
+		Jobs:            false,
+		Resume:          false,
 		Constraints: []string{
 			"an external sender receives no native delivery receipts",
 			"receiver holds/refusals are unobservable",
 			"session_id is an ingress guard only",
+			"headless jobs inherit local permission settings; no bypass flag is added",
+			"review policy is not offered: plan mode is not an OS sandbox",
 		},
 	}
 	out, err := exec.CommandContext(ctx, "claude", "--version").Output()
@@ -53,8 +57,14 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		return caps, nil
 	}
 	caps.LiveMessaging = versionAtLeast(v[0], MinVersion)
+	caps.Jobs = caps.LiveMessaging
+	caps.Resume = caps.LiveMessaging
+	if caps.Jobs {
+		caps.Constraints = append(caps.Constraints,
+			"jobs native-verified at 2.1.303 on macOS arm64; the configured native provider selects the model")
+	}
 	if !caps.LiveMessaging {
-		caps.Constraints = append(caps.Constraints, "installed version is below the known messaging floor")
+		caps.Constraints = append(caps.Constraints, "installed version is below the known floor")
 	}
 	return caps, nil
 }

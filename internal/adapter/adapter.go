@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"amgo/internal/model"
+	"amgo/internal/runner"
 )
 
 type DiscoverRequest struct {
@@ -41,6 +42,35 @@ type Adapter interface {
 	Probe(ctx context.Context) (model.Capabilities, error)
 	Discover(ctx context.Context, req DiscoverRequest) ([]model.Candidate, error)
 	Send(ctx context.Context, req SendRequest) (SendResult, error)
+}
+
+// RunRequest asks an adapter for one owned, non-interactive provider command.
+// NativeSessionID is set only for an explicit continuation of a stopped job.
+type RunRequest struct {
+	JobID           string
+	Workspace       string
+	Prompt          string
+	Model           string
+	Effort          string
+	Policy          string // default | review
+	NativeSessionID string
+	Timeout         time.Duration
+}
+
+// RunPlan is one adapter-specific provider invocation. NativeSessionID is set
+// when the adapter can assign the provider's session ID before the process
+// emits it (Claude does); otherwise the parser reports it later.
+type RunPlan struct {
+	Spec            runner.Spec
+	Parser          runner.Parser
+	NativeSessionID string
+}
+
+// JobAdapter is implemented by adapters that can run owned jobs. RunSpec must
+// put the prompt on stdin and must never add a bypass or approval flag the
+// operator did not request.
+type JobAdapter interface {
+	RunSpec(ctx context.Context, req RunRequest) (RunPlan, error)
 }
 
 // FrameBody is the plain-text envelope both adapters deliver. It never mimics
