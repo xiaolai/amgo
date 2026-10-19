@@ -9,7 +9,7 @@ model SDK. It discovers sessions that are already running, sends one bounded
 message through the provider's own local transport, and keeps a durable outbox
 with explicit acknowledgement rules.
 
-**v0.1.1** supports Claude Code and Codex on macOS and Linux. Supervised jobs
+**v0.1.2** supports Claude Code and Codex on macOS and Linux. Supervised jobs
 and the other adapters are later milestones.
 
 ## Why
@@ -160,7 +160,7 @@ config, and keep amgo's state root owner-only.
 
 ## Status
 
-| Area | v0.1.1 |
+| Area | v0.1.2 |
 |---|---|
 | One CGO-free Go binary | implemented |
 | Versioned JSON envelope and stable exit codes | implemented |
