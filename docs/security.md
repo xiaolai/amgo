@@ -35,6 +35,24 @@ A recipient agent should treat an amgo message as another session's message,
 not as operator consent. The message header carries the sender label and
 message ID; the label is not authenticated beyond the same-user boundary.
 
+The default test suite pins the part of this boundary the binary can enforce:
+
+- A body claiming operator approval cannot authorize `amgo retry`; the command
+  refuses without the explicit `--accept-duplicate-risk` flag.
+- Body text is never parsed as CLI options, interpolated into a shell command,
+  or used to select another state home.
+- Human output neutralizes C0 controls, DEL, C1 controls (including 8-bit CSI),
+  Unicode bidi controls and line separators. JSON stays lossless.
+- The agent skill grants only `Bash(amgo:*)`, Codex implicit invocation is
+  disabled, and `tests/security` fails if the skill or the `AGENTS.md` fallback
+  loses the no-approval and no-retry rules.
+- v0.1 has no job runner or approval action, so there is no path that could
+  re-submit denied provider work under different terms.
+
+This covers amgo and its instructions, not a provider's own approval UI. A
+message can still contain text written to persuade an agent; only the agent's
+instruction layer and the user's review stand between that text and an action.
+
 ## Path and transport checks
 
 - Socket paths must be local, absolute, owner-only, and inside a private
