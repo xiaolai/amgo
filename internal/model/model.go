@@ -10,6 +10,7 @@ const (
 	AdapterOpenCode = "opencode"
 	AdapterAgy      = "agy"
 	AdapterQwen     = "qwen"
+	AdapterACP      = "acp"
 )
 
 const (

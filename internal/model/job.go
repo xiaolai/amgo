@@ -41,13 +41,15 @@ type Job struct {
 	CheckoutID    string `json:"checkout_id,omitempty"`
 	RepoID        string `json:"repo_id,omitempty"`
 
-	Prompt            string `json:"prompt"`
-	PromptSHA256      string `json:"prompt_sha256"`
-	PromptBytes       int    `json:"prompt_bytes"`
-	Model             string `json:"model,omitempty"`
-	Effort            string `json:"effort,omitempty"`
-	Policy            string `json:"policy"`
-	AdmitExperimental bool   `json:"admit_experimental,omitempty"`
+	Prompt            string   `json:"prompt"`
+	PromptSHA256      string   `json:"prompt_sha256"`
+	PromptBytes       int      `json:"prompt_bytes"`
+	Model             string   `json:"model,omitempty"`
+	Effort            string   `json:"effort,omitempty"`
+	Policy            string   `json:"policy"`
+	ACPCommand        string   `json:"acp_command,omitempty"`
+	ACPArgs           []string `json:"acp_args,omitempty"`
+	AdmitExperimental bool     `json:"admit_experimental,omitempty"`
 	// PolicyProvenance records the exact native restrictions requested, never
 	// a claim that they are an OS sandbox the provider does not supply.
 	PolicyProvenance string `json:"policy_provenance,omitempty"`

@@ -60,6 +60,8 @@ type RunRequest struct {
 	Policy            string // default | review
 	NativeSessionID   string
 	Timeout           time.Duration
+	ACPCommand        string
+	ACPArgs           []string
 	AdmitExperimental bool
 }
 
