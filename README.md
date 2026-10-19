@@ -132,6 +132,16 @@ short transaction; a write failure after native acceptance is reported as
 See the [quickstart](docs/quickstart.md) for the full command flow and
 [security notes](docs/security.md) for the trust model.
 
+## Agent use
+
+`skills/amgo/SKILL.md` is a conservative Claude Code skill: it may be invoked
+only when the user explicitly asks to use amgo, and it stops on an unknown
+outcome instead of retrying. For Codex and other `AGENTS.md` agents, use the
+block in [agent usage](docs/agent-usage.md).
+
+A skill is instructions, not a permission system. Install it only in a trusted
+config, and keep amgo's state root owner-only.
+
 ## Status
 
 | Area | v0.1.0 |
