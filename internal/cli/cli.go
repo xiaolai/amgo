@@ -35,18 +35,19 @@ import (
 var Version = version.Version
 
 type App struct {
-	In         io.Reader
-	Out        io.Writer
-	Err        io.Writer
-	Home       string
-	JSON       bool
-	Verbose    bool
-	NoColor    bool
-	Timeout    time.Duration
-	TimeoutSet bool
-	Adapters   map[string]adapter.Adapter
-	Svc        *message.Service
-	JobSvc     *job.Service
+	In                io.Reader
+	Out               io.Writer
+	Err               io.Writer
+	Home              string
+	JSON              bool
+	Verbose           bool
+	NoColor           bool
+	Timeout           time.Duration
+	TimeoutSet        bool
+	AdmitExperimental bool
+	Adapters          map[string]adapter.Adapter
+	Svc               *message.Service
+	JobSvc            *job.Service
 }
 
 func Run(args []string, in io.Reader, out, errOut io.Writer) int {
@@ -66,14 +67,15 @@ func runWith(args []string, in io.Reader, out, errOut io.Writer, extra map[strin
 		return 2
 	}
 	app := &App{
-		In:         in,
-		Out:        out,
-		Err:        errOut,
-		JSON:       global.json,
-		Verbose:    global.verbose,
-		NoColor:    global.noColor,
-		Timeout:    global.timeout,
-		TimeoutSet: global.timeoutSet,
+		In:                in,
+		Out:               out,
+		Err:               errOut,
+		JSON:              global.json,
+		Verbose:           global.verbose,
+		NoColor:           global.noColor,
+		Timeout:           global.timeout,
+		TimeoutSet:        global.timeoutSet,
+		AdmitExperimental: global.admit,
 	}
 	if app.Timeout <= 0 {
 		app.Timeout = 60 * time.Second
@@ -154,6 +156,8 @@ func runWith(args []string, in io.Reader, out, errOut io.Writer, extra map[strin
 		return app.cmdCancel(ctx, rest[1:])
 	case "continue":
 		return app.cmdContinue(ctx, rest[1:])
+	case "integration":
+		return app.cmdIntegration(ctx, rest[1:])
 	case "__supervise":
 		return app.cmdSupervise(ctx, rest[1:])
 	default:
@@ -192,9 +196,10 @@ Commands:
   result       read a terminal job's evidence
   cancel       request cancellation and confirm termination
   continue     continue a stopped job's native session
+  integration  print an agent snippet or the JSON CLI contract
 
 Global flags (accepted before or after the command):
-  --json --home <dir> --timeout <dur> --verbose --no-color
+  --json --home <dir> --timeout <dur> --admit-experimental --verbose --no-color
 `)
 }
 
@@ -203,6 +208,7 @@ type globalFlags struct {
 	home       string
 	timeout    time.Duration
 	timeoutSet bool
+	admit      bool
 	verbose    bool
 	noColor    bool
 }
@@ -229,6 +235,7 @@ var commandValueFlags = map[string]bool{
 	"until": true, "max-messages": true, "expires": true, "format": true,
 	"prompt-file": true, "model": true, "effort": true, "policy": true,
 	"deadline": true, "after": true, "grace": true,
+	"qwen-home": true, "endpoint": true, "target": true,
 }
 
 func parseGlobals(args []string) (globalFlags, []string, error) {
@@ -260,6 +267,8 @@ func parseGlobals(args []string) (globalFlags, []string, error) {
 			g.verbose = true
 		case arg == "--no-color" || arg == "-no-color":
 			g.noColor = true
+		case arg == "--admit-experimental" || arg == "-admit-experimental":
+			g.admit = true
 		case arg == "--home" || arg == "-home":
 			if i+1 >= len(args) {
 				return g, nil, fmt.Errorf("--home requires a value")
@@ -443,7 +452,11 @@ func (a *App) cmdSessions(ctx context.Context, args []string) int {
 	var homes stringList
 	fs.Var(&homes, "config-home", "Claude config home (repeatable)")
 	codexHome := fs.String("codex-home", "", "Codex config home")
-	_, err := parseCommand(fs, args, map[string]bool{"config-home": true, "codex-home": true})
+	qwenHome := fs.String("qwen-home", "", "Qwen config home")
+	endpoint := fs.String("endpoint", "", "OpenCode loopback server URL")
+	_, err := parseCommand(fs, args, map[string]bool{
+		"config-home": true, "codex-home": true, "qwen-home": true, "endpoint": true,
+	})
 	if err != nil {
 		return a.fail("sessions", model.WrapError(model.ErrUsage, "invalid flags", err), nil)
 	}
@@ -475,13 +488,13 @@ func (a *App) cmdSessions(ctx context.Context, args []string) int {
 	rows := make([]row, 0, len(registered))
 	reg := map[string]bool{}
 	for _, s := range registered {
-		reg[s.Target.Adapter+"\x00"+s.Target.ConfigHome+"\x00"+s.Target.NativeSessionID] = true
+		reg[s.Target.Adapter+"\x00"+s.Target.ConfigHome+"\x00"+s.Target.Endpoint+"\x00"+s.Target.NativeSessionID] = true
 		rows = append(rows, row{Alias: s.Alias, Adapter: s.Target.Adapter, NativeID: s.Target.NativeSessionID, Status: s.Target.Status, Registered: true, Active: s.UnregisteredAt == nil})
 	}
 	if *discover {
 		if cands, err := session.DiscoverClaude(ctx, config.ClaudeHomes(homes), a.Timeout); err == nil {
 			for _, c := range cands {
-				if reg[c.Target.Adapter+"\x00"+c.Target.ConfigHome+"\x00"+c.Target.NativeSessionID] {
+				if reg[c.Target.Adapter+"\x00"+c.Target.ConfigHome+"\x00"+c.Target.Endpoint+"\x00"+c.Target.NativeSessionID] {
 					continue
 				}
 				reachable := c.Live
@@ -492,7 +505,7 @@ func (a *App) cmdSessions(ctx context.Context, args []string) int {
 		}
 		if cands, err := session.DiscoverCodex(ctx, config.CodexHome(*codexHome), a.Timeout); err == nil {
 			for _, c := range cands {
-				if reg[c.Target.Adapter+"\x00"+c.Target.ConfigHome+"\x00"+c.Target.NativeSessionID] {
+				if reg[c.Target.Adapter+"\x00"+c.Target.ConfigHome+"\x00"+c.Target.Endpoint+"\x00"+c.Target.NativeSessionID] {
 					continue
 				}
 				if !c.Live && !*all {
@@ -503,6 +516,36 @@ func (a *App) cmdSessions(ctx context.Context, args []string) int {
 			}
 		} else {
 			fmt.Fprintln(a.Err, "warning: codex discovery:", err)
+		}
+		if cands, err := session.DiscoverQwen(ctx, config.QwenHome(*qwenHome), a.Timeout); err == nil {
+			for _, c := range cands {
+				if reg[c.Target.Adapter+"\x00"+c.Target.ConfigHome+"\x00"+c.Target.Endpoint+"\x00"+c.Target.NativeSessionID] {
+					continue
+				}
+				if !c.Live && !*all {
+					continue
+				}
+				reachable := c.Live
+				rows = append(rows, row{Alias: c.Name, Adapter: c.Adapter, NativeID: c.NativeSessionID, Status: c.Status, Reachable: &reachable, Reason: c.Reason})
+			}
+		} else {
+			fmt.Fprintln(a.Err, "warning: qwen discovery:", err)
+		}
+		if *endpoint != "" {
+			if cands, err := session.DiscoverOpenCode(ctx, *endpoint, a.Timeout); err == nil {
+				for _, c := range cands {
+					if reg[c.Target.Adapter+"\x00"+c.Target.ConfigHome+"\x00"+c.Target.Endpoint+"\x00"+c.Target.NativeSessionID] {
+						continue
+					}
+					if !c.Live && !*all {
+						continue
+					}
+					reachable := c.Live
+					rows = append(rows, row{Alias: c.Name, Adapter: c.Adapter, NativeID: c.NativeSessionID, Status: c.Status, Reachable: &reachable, Reason: c.Reason})
+				}
+			} else {
+				fmt.Fprintln(a.Err, "warning: opencode discovery:", err)
+			}
 		}
 	}
 	return a.ok("sessions", map[string]any{"sessions": rows}, func() {
@@ -654,9 +697,90 @@ func (a *App) cmdJoin(ctx context.Context, args []string) int {
 		return a.ok("join", joined, func() {
 			fmt.Fprintf(a.Out, "joined %s -> %s (%s)\n", render.Safe(joined.Alias), joined.ID, render.Safe(joined.Target.NativeSessionID))
 		})
+	case "qwen":
+		fs := flag.NewFlagSet("join qwen", flag.ContinueOnError)
+		fs.SetOutput(a.Err)
+		name := fs.String("name", "", "alias")
+		sid := fs.String("session", "", "Qwen session ID")
+		qwenHome := fs.String("qwen-home", "", "Qwen config home")
+		cwdFlag := fs.String("cwd", "", "checkout directory")
+		_, err := parseCommand(fs, rest, map[string]bool{"name": true, "session": true, "qwen-home": true, "cwd": true})
+		if err != nil {
+			return a.fail("join", model.WrapError(model.ErrUsage, "invalid flags", err), nil)
+		}
+		if *name == "" || *sid == "" {
+			return a.fail("join", model.NewError(model.ErrUsage, "--name and --session are required"), nil)
+		}
+		cands, err := session.DiscoverQwen(ctx, config.QwenHome(*qwenHome), a.Timeout)
+		if err != nil {
+			return a.fail("join", err, nil)
+		}
+		var pick *model.Candidate
+		for i := range cands {
+			if cands[i].NativeSessionID == *sid {
+				pick = &cands[i]
+				break
+			}
+		}
+		if pick == nil {
+			return a.fail("join", model.NewError(model.ErrTargetUnavailable, "no Qwen registry record with that session ID"), nil)
+		}
+		if !pick.Live {
+			return a.fail("join", model.NewError(model.ErrTargetNotLive, pick.Reason), nil)
+		}
+		return a.joinCandidate(ctx, *name, *cwdFlag, pick, model.AdapterQwen)
+	case "opencode":
+		fs := flag.NewFlagSet("join opencode", flag.ContinueOnError)
+		fs.SetOutput(a.Err)
+		name := fs.String("name", "", "alias")
+		sid := fs.String("session", "", "OpenCode session ID")
+		endpoint := fs.String("endpoint", "", "OpenCode loopback server URL")
+		cwdFlag := fs.String("cwd", "", "checkout directory")
+		_, err := parseCommand(fs, rest, map[string]bool{"name": true, "session": true, "endpoint": true, "cwd": true})
+		if err != nil {
+			return a.fail("join", model.WrapError(model.ErrUsage, "invalid flags", err), nil)
+		}
+		if *name == "" || *sid == "" || *endpoint == "" {
+			return a.fail("join", model.NewError(model.ErrUsage, "--name, --session and --endpoint are required"), nil)
+		}
+		cands, err := session.DiscoverOpenCode(ctx, *endpoint, a.Timeout)
+		if err != nil {
+			return a.fail("join", err, nil)
+		}
+		var pick *model.Candidate
+		for i := range cands {
+			if cands[i].NativeSessionID == *sid {
+				pick = &cands[i]
+				break
+			}
+		}
+		if pick == nil {
+			return a.fail("join", model.NewError(model.ErrTargetUnavailable, "no OpenCode session with that ID on the endpoint"), nil)
+		}
+		return a.joinCandidate(ctx, *name, *cwdFlag, pick, model.AdapterOpenCode)
 	default:
-		return a.fail("join", model.NewError(model.ErrUsage, "join requires claude or codex"), nil)
+		return a.fail("join", model.NewError(model.ErrUsage, "join requires claude, codex, qwen or opencode"), nil)
 	}
+}
+
+func (a *App) joinCandidate(ctx context.Context, name, cwd string, pick *model.Candidate, adapterName string) int {
+	caps, err := a.Adapters[adapterName].Probe(ctx)
+	if err != nil {
+		return a.fail("join", err, nil)
+	}
+	setCheckout(&pick.Target, cwd)
+	st, err := store.Open(config.DBPath(a.Home), 2*time.Second)
+	if err != nil {
+		return a.fail("join", err, nil)
+	}
+	defer st.Close()
+	joined, err := session.Join(st, session.JoinRequest{Alias: name, Candidate: *pick, Capabilities: caps, Now: time.Now().UTC()})
+	if err != nil {
+		return a.fail("join", err, nil)
+	}
+	return a.ok("join", joined, func() {
+		fmt.Fprintf(a.Out, "joined %s -> %s (%s)\n", render.Safe(joined.Alias), joined.ID, render.Safe(joined.Target.NativeSessionID))
+	})
 }
 
 func (a *App) cmdLeave(args []string) int {
@@ -787,6 +911,7 @@ func (a *App) cmdSend(ctx context.Context, args []string) int {
 		IdempotencyKey:        *key,
 		ExpectReply:           *expect,
 		AcceptUnknownDelivery: *accept,
+		AdmitExperimental:     a.AdmitExperimental,
 	})
 	if err != nil {
 		return a.failSend("send", err, out, pos[0], *key)
@@ -822,6 +947,7 @@ func (a *App) cmdRetry(ctx context.Context, args []string) int {
 		SenderAlias:           *as,
 		AcceptDuplicateRisk:   *accept,
 		AcceptUnknownDelivery: *acceptUnknown,
+		AdmitExperimental:     a.AdmitExperimental,
 		IdempotencyKey:        *key,
 	})
 	if err != nil {

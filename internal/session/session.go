@@ -15,6 +15,8 @@ import (
 	"amgo/internal/adapter"
 	"amgo/internal/adapter/claude"
 	"amgo/internal/adapter/codex"
+	"amgo/internal/adapter/opencode"
+	"amgo/internal/adapter/qwen"
 	"amgo/internal/ids"
 	"amgo/internal/model"
 	"amgo/internal/store"
@@ -110,6 +112,19 @@ func DiscoverClaude(ctx context.Context, homes []string, timeout time.Duration) 
 func DiscoverCodex(ctx context.Context, home string, timeout time.Duration) ([]model.Candidate, error) {
 	a := codex.New()
 	return a.Discover(ctx, adapter.DiscoverRequest{CodexHome: home, Timeout: timeout})
+}
+
+// DiscoverQwen reads the documented cross-session registry. It never dials a
+// socket and never returns credentials.
+func DiscoverQwen(ctx context.Context, home string, timeout time.Duration) ([]model.Candidate, error) {
+	a := qwen.New()
+	return a.Discover(ctx, adapter.DiscoverRequest{QwenHome: home, Timeout: timeout})
+}
+
+// DiscoverOpenCode lists sessions on an explicitly supplied loopback server.
+func DiscoverOpenCode(ctx context.Context, endpoint string, timeout time.Duration) ([]model.Candidate, error) {
+	a := opencode.New()
+	return a.Discover(ctx, adapter.DiscoverRequest{Endpoint: endpoint, Timeout: timeout})
 }
 
 // CheckoutIDs distinguishes a worktree checkout from the shared Git repository.

@@ -71,6 +71,7 @@ func (a *App) cmdRun(ctx context.Context, args []string) int {
 		Adapter: pos[0], Workspace: *cwd, Prompt: prompt,
 		Model: *modelName, Effort: *effort, Policy: *policy,
 		Timeout: timeout, Background: *background,
+		AdmitExperimental: a.AdmitExperimental,
 	})
 	if err != nil {
 		return a.failJob("run", err, j)
@@ -261,6 +262,7 @@ func (a *App) cmdContinue(ctx context.Context, args []string) int {
 	}
 	j, err := a.JobSvc.Continue(ctx, job.ContinueInput{
 		JobID: pos[0], Prompt: prompt, Timeout: timeout, Background: *background,
+		AdmitExperimental: a.AdmitExperimental,
 	})
 	if err != nil {
 		return a.failJob("continue", err, j)
