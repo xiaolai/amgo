@@ -3,4 +3,4 @@ package version
 
 // Version is the user-visible release version. Build scripts override it with
 // -X amgo/internal/version.Version=<version>.
-var Version = "0.4.0"
+var Version = "0.5.0"

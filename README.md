@@ -11,7 +11,7 @@ message through the provider's own local transport, and runs one owned
 non-interactive provider process with persistent state, bounded logs and
 confirmed cancellation.
 
-**v0.4.0** supports Claude Code and Codex messaging, Claude Code, Codex and
+**v0.5.0** supports Claude Code and Codex messaging, Claude Code, Codex and
 OpenCode jobs, explicit-endpoint OpenCode messaging, and a documented-only ACP
 client on macOS and Linux. Qwen messaging, Qwen/agy jobs and ACP are
 implemented from official protocols but are documented-only: they require
@@ -134,7 +134,7 @@ state is not `unknown`.
   eligibility.
 - An ACP v1 agent for `run acp`, supplied explicitly with `--acp-command`;
   documented-only and not certified.
-- macOS or Linux. Windows is not supported in v0.4.
+- macOS or Linux. Windows is not supported in v0.5.
 - The same OS user as the target session. That user boundary is the trust
   boundary; amgo is not an authorization or sandbox boundary.
 - Go 1.26+ only when building from source.
@@ -217,7 +217,7 @@ config, and keep amgo's state root owner-only.
 
 ## Status
 
-| Area | v0.4.0 |
+| Area | v0.5.0 |
 |---|---|
 | One CGO-free Go binary | implemented |
 | Versioned JSON envelope and stable exit codes | implemented |
