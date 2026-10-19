@@ -29,9 +29,9 @@ Discover live sessions. Discovery reads the native registry only; it does not
 scan transcripts or send messages.
 
 ```sh
-amgo sessions --discover --config-home "$CLAUDE_CONFIG_DIR"
+amgo sessions --discover --config-home "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 amgo join claude --name architect --session <native-session-id> \
-  --config-home "$CLAUDE_CONFIG_DIR"
+  --config-home "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 ```
 
 Send. The first send to a Claude target requires an explicit acknowledgement
@@ -53,7 +53,7 @@ loaded in that daemon are messageable; a stored-but-unloaded thread is refused
 because queueing it would load a new runtime.
 
 ```sh
-amgo sessions --discover --codex-home "$CODEX_HOME"
+amgo sessions --discover --codex-home "${CODEX_HOME:-$HOME/.codex}"
 amgo join codex --name builder --thread <thread-id>
 printf '%s' 'Please run the focused tests.' | amgo send builder --stdin
 ```

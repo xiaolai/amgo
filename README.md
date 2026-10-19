@@ -48,9 +48,9 @@ signed with a Developer ID and notarised by Apple.
 Claude Code:
 
 ```sh
-amgo sessions --discover --config-home "$CLAUDE_CONFIG_DIR"
+amgo sessions --discover --config-home "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 amgo join claude --name architect --session <native-session-id> \
-  --config-home "$CLAUDE_CONFIG_DIR"
+  --config-home "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 
 printf '%s' 'Review the parser change.' | \
   amgo send architect --stdin --accept-unknown-delivery --expect-reply
@@ -65,8 +65,8 @@ persisted for later sends to the same target.
 Codex:
 
 ```sh
-amgo sessions --discover --codex-home "$CODEX_HOME"
-amgo join codex --name builder --thread <thread-id> --codex-home "$CODEX_HOME"
+amgo sessions --discover --codex-home "${CODEX_HOME:-$HOME/.codex}"
+amgo join codex --name builder --thread <thread-id> --codex-home "${CODEX_HOME:-$HOME/.codex}"
 
 printf '%s' 'Run the focused tests.' | amgo send builder --stdin
 ```
