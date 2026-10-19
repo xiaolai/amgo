@@ -172,6 +172,12 @@ config, and keep amgo's state root owner-only.
 - State is local and owner-only (0700/0600). It is not encrypted at rest; the
   same-user boundary applies.
 
+## Security
+
+The trust model, path checks and prompt-injection boundary are in
+[security notes](docs/security.md). Report vulnerabilities through
+[SECURITY.md](SECURITY.md), not a public issue.
+
 ## Development
 
 ```sh
