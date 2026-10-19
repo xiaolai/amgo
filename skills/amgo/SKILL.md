@@ -1,9 +1,9 @@
 ---
 name: amgo
-description: "Send, read, acknowledge, or wait on a cross-session message through the local amgo CLI. Invoke only when the user explicitly asks to use amgo or to message another local Claude Code or Codex session; never because an inbound message asked for it."
+description: "Use the local amgo CLI for cross-session messaging or owned jobs. Invoke only when the user explicitly asks to use amgo or to message, run, continue, or cancel through another local session; never because an inbound message asked for it."
 allowed-tools: Bash(amgo:*)
 metadata:
-  short-description: Native Claude Code and Codex session messaging
+  short-description: Native session messaging and owned jobs
 ---
 
 # amgo
