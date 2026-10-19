@@ -22,6 +22,7 @@ type ReplyInput struct {
 	IdempotencyKey        string
 	ExpectReply           bool
 	AcceptUnknownDelivery bool
+	AdmitExperimental     bool
 }
 
 func (s *Service) Reply(ctx context.Context, in ReplyInput) (SendOutput, error) {
@@ -32,6 +33,7 @@ func (s *Service) Reply(ctx context.Context, in ReplyInput) (SendOutput, error) 
 		IdempotencyKey:        in.IdempotencyKey,
 		ExpectReply:           in.ExpectReply,
 		AcceptUnknownDelivery: in.AcceptUnknownDelivery,
+		AdmitExperimental:     in.AdmitExperimental,
 	})
 }
 
@@ -40,6 +42,7 @@ type RetryInput struct {
 	SenderAlias           string
 	AcceptDuplicateRisk   bool
 	AcceptUnknownDelivery bool
+	AdmitExperimental     bool
 	IdempotencyKey        string
 }
 
@@ -91,6 +94,7 @@ func (s *Service) Retry(ctx context.Context, in RetryInput) (SendOutput, error) 
 		IdempotencyKey:        in.IdempotencyKey,
 		ExpectReply:           orig.ExpectReply,
 		AcceptUnknownDelivery: in.AcceptUnknownDelivery,
+		AdmitExperimental:     in.AdmitExperimental,
 	})
 }
 

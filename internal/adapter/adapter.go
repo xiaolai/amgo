@@ -13,6 +13,8 @@ import (
 type DiscoverRequest struct {
 	Homes     []string
 	CodexHome string
+	QwenHome  string
+	Endpoint  string
 	Timeout   time.Duration
 }
 
@@ -26,6 +28,9 @@ type SendRequest struct {
 	Body           string
 	ExpectReply    bool
 	Timeout        time.Duration
+	// AdmitExperimental permits a documented-only mutation path. It is set by
+	// the operator, never by peer content.
+	AdmitExperimental bool
 }
 
 type SendResult struct {
@@ -47,14 +52,15 @@ type Adapter interface {
 // RunRequest asks an adapter for one owned, non-interactive provider command.
 // NativeSessionID is set only for an explicit continuation of a stopped job.
 type RunRequest struct {
-	JobID           string
-	Workspace       string
-	Prompt          string
-	Model           string
-	Effort          string
-	Policy          string // default | review
-	NativeSessionID string
-	Timeout         time.Duration
+	JobID             string
+	Workspace         string
+	Prompt            string
+	Model             string
+	Effort            string
+	Policy            string // default | review
+	NativeSessionID   string
+	Timeout           time.Duration
+	AdmitExperimental bool
 }
 
 // RunPlan is one adapter-specific provider invocation. NativeSessionID is set

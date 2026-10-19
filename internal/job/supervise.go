@@ -66,6 +66,7 @@ func (s *Service) Supervise(ctx context.Context, jobID string) (model.Job, error
 		JobID: job.ID, Workspace: job.Workspace, Prompt: job.Prompt,
 		Model: job.Model, Effort: job.Effort, Policy: job.Policy,
 		NativeSessionID: job.NativeSessionID, Timeout: timeout,
+		AdmitExperimental: job.AdmitExperimental,
 	})
 	if err != nil {
 		return s.finalizeError(job, err)

@@ -353,3 +353,30 @@ func TestResultRequiresTerminal(t *testing.T) {
 		t.Fatalf("result err=%v", err)
 	}
 }
+
+type admitAdapter struct{ fakeAdapter }
+
+func (a *admitAdapter) RunSpec(ctx context.Context, req adapter.RunRequest) (adapter.RunPlan, error) {
+	if !req.AdmitExperimental {
+		return adapter.RunPlan{}, model.NewError(model.ErrPolicyRefused, "documented-only")
+	}
+	return a.fakeAdapter.RunSpec(ctx, req)
+}
+
+func TestExperimentalAdmissionSurvivesSupervision(t *testing.T) {
+	home := t.TempDir()
+	ws := t.TempDir()
+	svc := New(home, map[string]adapter.Adapter{"fake": &admitAdapter{}})
+	if _, err := svc.Start(context.Background(), StartInput{Adapter: "fake", Workspace: ws, Prompt: "ok"}); model.Code(err) != model.ErrPolicyRefused {
+		t.Fatalf("without admission err=%v", err)
+	}
+	job, err := svc.Start(context.Background(), StartInput{
+		Adapter: "fake", Workspace: ws, Prompt: "ok", AdmitExperimental: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != model.JobCompleted || !job.AdmitExperimental {
+		t.Fatalf("job=%+v", job)
+	}
+}

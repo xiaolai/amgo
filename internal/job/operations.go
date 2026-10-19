@@ -193,10 +193,11 @@ func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (m
 
 // ContinueInput starts a new job in a stopped job's native session.
 type ContinueInput struct {
-	JobID      string
-	Prompt     string
-	Timeout    time.Duration
-	Background bool
+	JobID             string
+	Prompt            string
+	Timeout           time.Duration
+	Background        bool
+	AdmitExperimental bool
 }
 
 func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, error) {
@@ -265,6 +266,7 @@ func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, er
 		JobID: "validate", Workspace: orig.Workspace, Prompt: in.Prompt,
 		Model: orig.Model, Effort: orig.Effort, Policy: orig.Policy,
 		NativeSessionID: orig.NativeSessionID, Timeout: timeout,
+		AdmitExperimental: in.AdmitExperimental,
 	}); err != nil {
 		return model.Job{}, err
 	}
@@ -273,7 +275,8 @@ func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, er
 		Workspace: orig.Workspace, CheckoutID: orig.CheckoutID, RepoID: orig.RepoID,
 		Prompt: in.Prompt, PromptSHA256: hashPrompt(in.Prompt), PromptBytes: len(in.Prompt),
 		Model: orig.Model, Effort: orig.Effort, Policy: orig.Policy,
-		State: model.JobCreated, CreatedAt: now, UpdatedAt: now,
+		AdmitExperimental: in.AdmitExperimental,
+		State:             model.JobCreated, CreatedAt: now, UpdatedAt: now,
 		Deadline: now.Add(timeout), NativeSessionID: orig.NativeSessionID,
 		ResumeOf: orig.ID,
 	}

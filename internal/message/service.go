@@ -106,6 +106,7 @@ type SendInput struct {
 	IdempotencyKey        string
 	ExpectReply           bool
 	AcceptUnknownDelivery bool
+	AdmitExperimental     bool
 }
 
 type SendOutput struct {
@@ -406,15 +407,16 @@ func (s *Service) Send(ctx context.Context, in SendInput) (out SendOutput, err e
 	_ = st2.Close()
 	sendCtx, cancel := context.WithTimeout(ctx, s.RequestTimeout)
 	result, sendErr := ad.Send(sendCtx, adapter.SendRequest{
-		Target:         target,
-		MessageID:      msgID,
-		ConversationID: conversationID,
-		RetryOf:        in.RetryOf,
-		ReplyTo:        replyTo,
-		SenderLabel:    senderLabel,
-		Body:           in.Body,
-		ExpectReply:    in.ExpectReply,
-		Timeout:        s.RequestTimeout,
+		Target:            target,
+		MessageID:         msgID,
+		ConversationID:    conversationID,
+		RetryOf:           in.RetryOf,
+		ReplyTo:           replyTo,
+		SenderLabel:       senderLabel,
+		Body:              in.Body,
+		ExpectReply:       in.ExpectReply,
+		Timeout:           s.RequestTimeout,
+		AdmitExperimental: in.AdmitExperimental,
 	})
 	cancel()
 

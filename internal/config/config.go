@@ -67,6 +67,21 @@ func ClaudeHomes(flags []string) []string {
 	return []string{filepath.Join(hd, ".claude")}
 }
 
+// QwenHome resolves the Qwen Code config home.
+func QwenHome(flag string) string {
+	if flag != "" {
+		return flag
+	}
+	if v := os.Getenv("QWEN_HOME"); v != "" {
+		return v
+	}
+	hd, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(hd, ".qwen")
+}
+
 // CodexHome resolves the Codex config home.
 func CodexHome(flag string) string {
 	if flag != "" {
