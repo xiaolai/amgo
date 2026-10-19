@@ -127,6 +127,17 @@ func TestFakeACPAgent(t *testing.T) {
 				result(m.ID, map[string]any{"stopReason": "refusal"})
 			case "max":
 				result(m.ID, map[string]any{"stopReason": "max_tokens"})
+			case "batch":
+				write([]any{
+					map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+						"sessionId": sessionID,
+						"update": map[string]any{
+							"sessionUpdate": "agent_message_chunk",
+							"content":       map[string]any{"type": "text", "text": "batched"},
+						},
+					}},
+					map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"stopReason": "end_turn"}},
+				})
 			case "hang":
 				promptID = m.ID
 			}
@@ -181,6 +192,13 @@ func TestDriverRejectsPermission(t *testing.T) {
 	}
 	if !strings.Contains(log, "permission-selected:reject") {
 		t.Fatalf("client did not select the reject option: %s", log)
+	}
+}
+
+func TestDriverAcceptsJSONBatch(t *testing.T) {
+	out, _ := runFake(t, "batch", "", runner.Options{})
+	if out.Result.Outcome != model.RunCompleted || out.Result.Evidence != "batched" {
+		t.Fatalf("out=%+v", out.Result)
 	}
 }
 

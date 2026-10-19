@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,13 @@ func (d *Driver) Run(ctx context.Context, dio *runner.DriverIO) (runner.Result, 
 				"ACP agent does not advertise session/load; continuation is refused")
 		}
 		if err := c.loadSession(ctx, sid, d.Workspace); err != nil {
+			var re *rpcError
+			if errors.As(err, &re) && re.Code == rpcAuthRequired {
+				return runner.Result{
+					Outcome: model.RunNeedsAction, ErrorCode: model.ErrProviderNeedsAction,
+					ErrorDetail: authDetail(authMethods),
+				}, nil
+			}
 			return runner.Result{}, err
 		}
 	} else {
@@ -166,20 +174,44 @@ func (c *client) readLoop() {
 			c.fail(err)
 			return
 		}
-		var m rpcMessage
-		if err := json.Unmarshal(line, &m); err != nil {
-			c.fail(model.WrapError(model.ErrEventParse, "ACP emitted invalid JSON", err))
+		raw := bytes.TrimSpace(line)
+		if len(raw) == 0 {
+			continue
+		}
+		if raw[0] == '[' {
+			var batch []json.RawMessage
+			if err := json.Unmarshal(raw, &batch); err != nil {
+				c.fail(model.WrapError(model.ErrEventParse, "ACP emitted an invalid JSON batch", err))
+				return
+			}
+			for _, one := range batch {
+				if !c.dispatch(one) {
+					return
+				}
+			}
+			continue
+		}
+		if !c.dispatch(raw) {
 			return
 		}
-		switch {
-		case m.Method != "" && len(m.ID) > 0 && string(m.ID) != "null":
-			c.handleRequest(m)
-		case m.Method != "":
-			c.handleNotification(m)
-		case len(m.ID) > 0:
-			c.handleResponse(m)
-		}
 	}
+}
+
+func (c *client) dispatch(raw []byte) bool {
+	var m rpcMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		c.fail(model.WrapError(model.ErrEventParse, "ACP emitted invalid JSON", err))
+		return false
+	}
+	switch {
+	case m.Method != "" && len(m.ID) > 0 && string(m.ID) != "null":
+		c.handleRequest(m)
+	case m.Method != "":
+		c.handleNotification(m)
+	case len(m.ID) > 0:
+		c.handleResponse(m)
+	}
+	return true
 }
 
 func (c *client) handleResponse(m rpcMessage) {
