@@ -3,13 +3,22 @@
 `amgo` is one standalone binary for messaging an existing Claude Code or Codex
 session. It does not run a daemon, MCP server, or model SDK.
 
-## Build
+## Install
+
+```sh
+brew install xiaolai/tap/amgo
+amgo version
+```
+
+Build from source with Go 1.26+ if you prefer:
 
 ```sh
 CGO_ENABLED=0 go build -trimpath -o dist/amgo ./cmd/amgo
 ./dist/amgo version
 ./dist/amgo doctor
 ```
+
+The rest of this guide assumes `amgo` is on your `PATH`.
 
 State lives under `AMGO_HOME` or the platform default. Use `--home <dir>` for a
 disposable state root.
