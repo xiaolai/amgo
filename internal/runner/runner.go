@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"hash"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +39,46 @@ type Spec struct {
 	Dir        string
 	Env        []string
 	Prompt     []byte
+	Driver     Driver
 	Provenance string
+}
+
+// Driver runs a protocol that needs a bidirectional conversation instead of a
+// one-shot prompt. The runner still owns the process, log, deadline and
+// cancellation. Next returns one bounded stdout line, already written to the
+// raw log; Emit persists a job event.
+type Driver interface {
+	Run(ctx context.Context, io *DriverIO) (Result, error)
+}
+
+type DriverIO struct {
+	In   io.Writer
+	Next func() ([]byte, error)
+	Emit func(Event) error
+}
+
+// lineReader logs each bounded stdout line and hands it to a driver.
+type lineReader struct {
+	sc *bufio.Scanner
+	lw *logWriter
+}
+
+func newLineReader(r io.Reader, lw *logWriter) *lineReader {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), MaxLineBytes)
+	return &lineReader{sc: sc, lw: lw}
+}
+
+func (l *lineReader) Next() ([]byte, error) {
+	if l.sc.Scan() {
+		line := append([]byte(nil), l.sc.Bytes()...)
+		l.lw.Out(line)
+		return line, nil
+	}
+	if err := l.sc.Err(); err != nil {
+		return nil, err
+	}
+	return nil, io.EOF
 }
 
 // Event is a bounded progress record from the parser.
@@ -109,6 +149,8 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 	if opts.MaxLogBytes <= 0 {
 		opts.MaxLogBytes = DefaultMaxLogBytes
 	}
+	runCtx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
 	lw, err := newLogWriter(opts.LogPath, opts.MaxLogBytes)
 	if err != nil {
 		return Outcome{}, model.WrapError(model.ErrInternal, "cannot create job log", err)
@@ -118,7 +160,16 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 	cmd := exec.Command(spec.Path, spec.Args...)
 	cmd.Dir = spec.Dir
 	cmd.Env = append(os.Environ(), spec.Env...)
-	cmd.Stdin = bytes.NewReader(spec.Prompt)
+	var stdin io.WriteCloser
+	if spec.Driver != nil {
+		var serr error
+		stdin, serr = cmd.StdinPipe()
+		if serr != nil {
+			return Outcome{}, model.WrapError(model.ErrInternal, "cannot capture provider stdin", serr)
+		}
+	} else {
+		cmd.Stdin = bytes.NewReader(spec.Prompt)
+	}
 	process.Configure(cmd)
 	outR, outW, err := os.Pipe()
 	if err != nil {
@@ -185,31 +236,34 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 	}
 
 	var scan sync.WaitGroup
-	scan.Add(2)
-	go func() {
-		defer scan.Done()
-		defer outR.Close()
-		sc := bufio.NewScanner(outR)
-		sc.Buffer(make([]byte, 0, 64<<10), MaxLineBytes)
-		for sc.Scan() {
-			line := append([]byte(nil), sc.Bytes()...)
-			lw.Out(line)
-			events, err := parser.Line(line)
-			if err != nil {
-				setParseErr(model.ErrEventParse, model.WrapError(model.ErrEventParse, "provider event rejected", err))
-				go process.TerminateGroup(pid, 2*time.Second)
-				return
+	scan.Add(1)
+	if spec.Driver == nil {
+		scan.Add(1)
+		go func() {
+			defer scan.Done()
+			defer outR.Close()
+			sc := bufio.NewScanner(outR)
+			sc.Buffer(make([]byte, 0, 64<<10), MaxLineBytes)
+			for sc.Scan() {
+				line := append([]byte(nil), sc.Bytes()...)
+				lw.Out(line)
+				events, err := parser.Line(line)
+				if err != nil {
+					setParseErr(model.ErrEventParse, model.WrapError(model.ErrEventParse, "provider event rejected", err))
+					go process.TerminateGroup(pid, 2*time.Second)
+					return
+				}
+				if !emit(events) {
+					go process.TerminateGroup(pid, 2*time.Second)
+					return
+				}
 			}
-			if !emit(events) {
+			if err := sc.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
+				setParseErr(model.ErrEventTooLarge, model.WrapError(model.ErrEventTooLarge, "provider event stream failed", err))
 				go process.TerminateGroup(pid, 2*time.Second)
-				return
 			}
-		}
-		if err := sc.Err(); err != nil && !errors.Is(err, os.ErrClosed) {
-			setParseErr(model.ErrEventTooLarge, model.WrapError(model.ErrEventTooLarge, "provider event stream failed", err))
-			go process.TerminateGroup(pid, 2*time.Second)
-		}
-	}()
+		}()
+	}
 	go func() {
 		defer scan.Done()
 		defer errR.Close()
@@ -219,6 +273,31 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 			lw.Err(sc.Bytes())
 		}
 	}()
+
+	type driverResult struct {
+		result Result
+		err    error
+	}
+	var driverDone chan driverResult
+	if spec.Driver != nil {
+		driverDone = make(chan driverResult, 1)
+		reader := newLineReader(outR, lw)
+		dio := &DriverIO{
+			In:   stdin,
+			Next: reader.Next,
+			Emit: func(ev Event) error {
+				if hooks.OnEvent == nil {
+					return nil
+				}
+				return hooks.OnEvent(ev)
+			},
+		}
+		go func() {
+			res, derr := spec.Driver.Run(runCtx, dio)
+			_ = stdin.Close()
+			driverDone <- driverResult{result: res, err: derr}
+		}()
+	}
 
 	waitErr := make(chan error, 1)
 	go func() { waitErr <- cmd.Wait() }()
@@ -231,18 +310,34 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 		timer = t.C
 	}
 	var wait error
+	var early *driverResult
 loop:
 	for {
 		select {
 		case wait = <-waitErr:
 			break loop
+		case dr := <-driverDone:
+			// The driver finished before the process did. Give the agent a
+			// short grace to exit after stdin closed, then terminate it.
+			early = &dr
+			select {
+			case wait = <-waitErr:
+			case <-time.After(5 * time.Second):
+				_ = process.TerminateGroup(pid, 5*time.Second)
+				wait = <-waitErr
+			}
+			break loop
 		case <-timer:
 			timedOut = true
+			runCancel()
+			time.Sleep(100 * time.Millisecond)
 			_ = process.TerminateGroup(pid, 5*time.Second)
 			wait = <-waitErr
 			break loop
 		case <-opts.Cancel:
 			cancelled = true
+			runCancel()
+			time.Sleep(100 * time.Millisecond)
 			_ = process.TerminateGroup(pid, 5*time.Second)
 			wait = <-waitErr
 			break loop
@@ -257,6 +352,8 @@ loop:
 			break loop
 		case <-ctx.Done():
 			cancelled = true
+			runCancel()
+			time.Sleep(100 * time.Millisecond)
 			_ = process.TerminateGroup(pid, 5*time.Second)
 			wait = <-waitErr
 			break loop
@@ -283,10 +380,33 @@ loop:
 		hookMu.Unlock()
 	default:
 	}
+	var dres driverResult
+	if spec.Driver != nil {
+		if early != nil {
+			dres = *early
+		} else {
+			select {
+			case dres = <-driverDone:
+			case <-time.After(3 * time.Second):
+				_ = outR.Close()
+				select {
+				case dres = <-driverDone:
+				case <-time.After(time.Second):
+					dres.err = model.NewError(model.ErrProcessLost, "protocol driver did not stop")
+				}
+			}
+		}
+	}
 	lw.Close()
 
+	res := Result{}
+	if spec.Driver == nil {
+		res = parser.Result()
+	} else {
+		res = dres.result
+	}
 	out := Outcome{
-		Result:       parser.Result(),
+		Result:       res,
 		LogBytes:     lw.Bytes(),
 		LogSHA256:    lw.SHA256(),
 		LogTruncated: lw.Truncated(),
@@ -305,6 +425,28 @@ loop:
 	he := hookErr
 	hookMu.Unlock()
 	switch {
+	case cancelled:
+		out.Result.Outcome = model.RunFailed
+		out.Result.ErrorCode = model.ErrInterrupted
+		out.Result.ErrorDetail = "cancelled by the operator"
+		out.ErrorCode = model.ErrInterrupted
+		out.ErrorDetail = "cancelled by the operator"
+	case timedOut:
+		out.Result.Outcome = model.RunFailed
+		out.Result.ErrorCode = model.ErrDeadlineExceeded
+		out.Result.ErrorDetail = "job deadline exceeded"
+		out.ErrorCode = model.ErrDeadlineExceeded
+		out.ErrorDetail = "job deadline exceeded"
+	case dres.err != nil:
+		code := model.Code(dres.err)
+		if code == model.ErrInternal {
+			code = model.ErrProviderFailed
+		}
+		out.Result.Outcome = model.RunFailed
+		out.Result.ErrorCode = code
+		out.Result.ErrorDetail = dres.err.Error()
+		out.ErrorCode = code
+		out.ErrorDetail = dres.err.Error()
 	case he != nil:
 		code := model.Code(he)
 		out.Result.Outcome = model.RunFailed
@@ -318,18 +460,6 @@ loop:
 		out.Result.ErrorDetail = pe.Error()
 		out.ErrorCode = pc
 		out.ErrorDetail = pe.Error()
-	case cancelled:
-		out.Result.Outcome = model.RunFailed
-		out.Result.ErrorCode = model.ErrInterrupted
-		out.Result.ErrorDetail = "cancelled by the operator"
-		out.ErrorCode = model.ErrInterrupted
-		out.ErrorDetail = "cancelled by the operator"
-	case timedOut:
-		out.Result.Outcome = model.RunFailed
-		out.Result.ErrorCode = model.ErrDeadlineExceeded
-		out.Result.ErrorDetail = "job deadline exceeded"
-		out.ErrorCode = model.ErrDeadlineExceeded
-		out.ErrorDetail = "job deadline exceeded"
 	case out.Result.Outcome == "":
 		code := -1
 		if out.ExitCode != nil {
