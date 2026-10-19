@@ -129,8 +129,8 @@ check_archives() {
 		a="amgo-${platforms[$i]}.tar.gz"
 		members="$(tar -tzf "${1}/${a}" | LC_ALL=C sort | tr '\n' ' ')" ||
 			fail "${a} is not a readable gzip tar archive"
-		[ "$members" = "LICENSE README.md amgo " ] ||
-			fail "${a} holds ${members:-nothing}, not exactly amgo, LICENSE and README.md"
+		[ "$members" = "LICENSE README.md THIRD-PARTY-NOTICES.md amgo " ] ||
+			fail "${a} holds ${members:-nothing}, not exactly amgo, LICENSE, README.md and THIRD-PARTY-NOTICES.md"
 		inner="$(tar -xzOf "${1}/${a}" amgo | shasum -a 256 | awk '{print $1}')" ||
 			fail "cannot read amgo from ${a}"
 		[ "$inner" = "${checked_shas[$i]}" ] ||
