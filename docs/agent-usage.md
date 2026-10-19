@@ -22,10 +22,26 @@ If you want the skill scoped to one project instead, place it at
 `.claude/skills/amgo/` in that project. amgo's own repository ignores
 `.claude/`, so its copy lives under `skills/amgo/` for distribution.
 
-## Codex and other AGENTS.md agents
+## Codex skill
 
-Codex and similar agents read `AGENTS.md`. Add a block like this to the project
-where the agent runs:
+Codex loads skills from `$CODEX_HOME/skills` (usually `~/.codex/skills`). The
+same `SKILL.md` works there; `agents/openai.yaml` sets
+`allow_implicit_invocation: false`, so Codex must not pull the skill into a
+conversation on its own. Invoke it explicitly with `$amgo`.
+
+```sh
+mkdir -p ~/.codex/skills
+cp -R skills/amgo ~/.codex/skills/
+```
+
+`allowed-tools` is a Claude Code field; Codex ignores it. Codex still needs
+permission to run the `amgo` command, so keep its shell policy and approval
+rules in place.
+
+## Agents without skill support
+
+Agents that only read `AGENTS.md` can use this block in the project where they
+run:
 
 ```markdown
 ## amgo messaging

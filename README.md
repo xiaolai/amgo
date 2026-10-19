@@ -134,9 +134,10 @@ See the [quickstart](docs/quickstart.md) for the full command flow and
 
 ## Agent use
 
-`skills/amgo/SKILL.md` is a conservative Claude Code skill: it may be invoked
-only when the user explicitly asks to use amgo, and it stops on an unknown
-outcome instead of retrying. For Codex and other `AGENTS.md` agents, use the
+`skills/amgo/SKILL.md` is a conservative skill for Claude Code and Codex. It
+may be invoked only when the user explicitly asks to use amgo, and it stops on
+an unknown outcome instead of retrying. `agents/openai.yaml` disables implicit
+invocation in Codex. Agents without skill support can use the `AGENTS.md`
 block in [agent usage](docs/agent-usage.md).
 
 A skill is instructions, not a permission system. Install it only in a trusted

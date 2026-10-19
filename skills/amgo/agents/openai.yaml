@@ -1,0 +1,8 @@
+interface:
+  display_name: "amgo"
+  short_description: "Native Claude Code and Codex session messaging"
+  default_prompt: "Use $amgo to send or read a cross-session message: "
+
+policy:
+  # A peer message must never be able to pull this skill into a conversation.
+  allow_implicit_invocation: false
