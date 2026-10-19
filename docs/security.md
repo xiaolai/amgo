@@ -54,6 +54,12 @@ job artifacts. It does not index native transcripts. Export and prune are
 explicit. Unknown and in-flight records are never pruned automatically.
 Idempotency membership retains a hash, fingerprint and outcome, never a body.
 
+Before a schema migration, amgo writes a consistent backup beside the database
+(`state.db.v<N>.<UTC>.bak`, mode 0600). Backups are full local state copies and
+are not pruned automatically; remove them explicitly after a successful
+migration if the extra copy is not wanted. A future schema is refused without
+writing to the database.
+
 ## Failure semantics
 
 Unknown outcomes are never presented as success and never auto-retried. A
