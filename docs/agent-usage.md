@@ -65,8 +65,9 @@ wait on a cross-session message.
   tokens.
 - Report job state literally. Only `completed` is success; `partial`,
   `needs_action` and `unknown` are not.
-- Never add `--admit-experimental` for Qwen or agy without an explicit user
-  request; those lanes are documented-only and not native-certified.
+- Never add `--admit-experimental` for Qwen, agy or ACP without an explicit
+  user request; those lanes are documented-only and not native-certified.
+- Never choose an `--acp-command` or approve an ACP permission request.
 ```
 
 ## Hard boundaries

@@ -99,6 +99,25 @@ protocol documentation but have no native certification in this environment.
 - agy and Qwen job lanes start a real provider process only after admission.
   They never add `--yolo`, `--dangerously-skip-permissions` or another bypass.
 
+## ACP
+
+ACP is a job protocol, not a peer message transport. The agent command is
+explicit operator input (`--acp-command` and repeatable `--acp-arg`); amgo
+does not discover agents or read a project file to select one.
+
+- The client advertises `fs.readTextFile=false`, `fs.writeTextFile=false` and
+  `terminal=false`. If an agent nevertheless requests a filesystem or terminal
+  method, amgo answers `-32601` and marks the job `needs_action`.
+- Every `session/request_permission` is answered with a documented reject
+  option, or `cancelled` when no reject option exists. amgo never selects
+  `allow_once` or `allow_always`.
+- amgo does not call `authenticate` automatically. An agent that requires
+  authentication produces `needs_action` with its advertised method names.
+- `session/load` is used only when the agent advertises `loadSession`.
+- ACP is documented-only and requires `--admit-experimental`. No real ACP
+  agent is installed or certified; the fixture tests prove the client's
+  protocol handling, not an agent's behavior.
+
 ## Path and transport checks
 
 - Socket paths must be local, absolute, owner-only, and inside a private

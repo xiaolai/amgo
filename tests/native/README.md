@@ -68,3 +68,7 @@ cannot force reliably. Keep the code guards and record evidence when run.
    the official headless and cross-session protocols and passes fixture tests;
    no native claim is made until an installed, pinned version passes a gate.
    Mutation paths require `--admit-experimental`.
+7. **ACP v1.** The client follows the official schema and passes a fake-agent
+   fixture covering initialize, session/new, session/load, prompt, permission
+   rejection, cancel and invalid JSON. No real ACP agent is installed, so there
+   is no native gate; the lane requires `--admit-experimental`.

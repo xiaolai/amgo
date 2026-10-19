@@ -11,11 +11,11 @@ message through the provider's own local transport, and runs one owned
 non-interactive provider process with persistent state, bounded logs and
 confirmed cancellation.
 
-**v0.3.0** supports Claude Code and Codex messaging, Claude Code, Codex and
-OpenCode jobs, and explicit-endpoint OpenCode messaging on macOS and Linux.
-Qwen messaging and Qwen/agy jobs are implemented from the official protocols
-but are documented-only: they require `--admit-experimental` and are not
-native-certified.
+**v0.4.0** supports Claude Code and Codex messaging, Claude Code, Codex and
+OpenCode jobs, explicit-endpoint OpenCode messaging, and a documented-only ACP
+client on macOS and Linux. Qwen messaging, Qwen/agy jobs and ACP are
+implemented from official protocols but are documented-only: they require
+`--admit-experimental` and are not native-certified.
 
 ## Why
 
@@ -128,6 +128,8 @@ state is not `unknown`.
   existing Qwen session.
 - Antigravity CLI 1.4.2 for agy jobs, documented-only and subject to account
   eligibility.
+- An ACP v1 agent for `run acp`, supplied explicitly with `--acp-command`;
+  documented-only and not certified.
 - macOS or Linux. Windows is not supported in v0.2.
 - The same OS user as the target session. That user boundary is the trust
   boundary; amgo is not an authorization or sandbox boundary.
@@ -210,7 +212,8 @@ config, and keep amgo's state root owner-only.
 | Qwen headless jobs | implemented from the official docs; requires `--admit-experimental`, binary not installed here |
 | agy headless jobs | implemented from the official docs; requires admission, account not eligible here |
 | Integration snippets and JSON contract | implemented |
-| Optional ACP adapter (F-048) | not implemented; deferred as experimental |
+| ACP v1 jobs (`run acp --acp-command`) | implemented from the official protocol; fake-agent fixtures only, no native claim |
+| Optional managed streaming (F-047) | not implemented; deferred as experimental |
 | Optional isolated worktrees (F-068) | later milestone |
 | Linux native certification and Windows | not claimed |
 

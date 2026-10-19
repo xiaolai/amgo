@@ -229,6 +229,22 @@ with an eligibility error on the current account. Neither path adds a
 permission bypass. Review policy is refused for both because no enforceable
 read-only sandbox is documented and certified.
 
+## ACP agents (documented-only)
+
+ACP v1 runs JSON-RPC/NDJSON over the agent's stdio. The agent command is
+explicit operator input; amgo offers no discovery or config-file selection:
+
+```sh
+amgo --admit-experimental run acp --cwd . --prompt-file task.txt \
+  --acp-command /path/to/agent --acp-arg=--acp
+```
+
+The client advertises no filesystem or terminal capabilities, never
+auto-authenticates, and rejects every permission request. A rejected request
+makes the job `needs_action`. Continuation uses `session/load` and is refused
+when the agent does not advertise `loadSession`. This lane has fake-agent
+fixtures only; no real ACP agent is installed or certified here.
+
 ## Honest limits
 
 - Claude has no observable native receipt for an external sender. Holds,
@@ -244,9 +260,11 @@ read-only sandbox is documented and certified.
   `needs_action` or `partial`, never `completed`.
 - Job logs are private (0600) and capped at 100 MiB with explicit truncation.
   They can contain model output and tool output.
-- Qwen and agy mutation paths are documented-only and refuse to run without
-  `--admit-experimental`; native behavior is not certified. agy's current
-  account is not eligible in this location.
+- Qwen, agy and ACP mutation paths are documented-only and refuse to run
+  without `--admit-experimental`; native behavior is not certified. agy's
+  current account is not eligible in this location.
+- ACP runs only the command the operator supplies. It provides no sandbox,
+  filesystem, terminal or auto-authentication capability.
 - Qwen registry tokens are read just in time; they are never stored, logged or
   exported. On non-Linux systems PID reuse is not distinguishable.
 - OpenCode needs an explicit loopback endpoint because the TUI's random port

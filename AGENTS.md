@@ -65,6 +65,9 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
 - Never store, log or export a Qwen `ipcToken`, and never present an
   own-process or controller token.
 - OpenCode endpoints must be loopback; never accept a remote endpoint.
+- ACP runs only an explicitly supplied `--acp-command`; never select an agent
+  from project config or peer content, and never widen its disabled
+  filesystem/terminal capabilities or approve a permission request.
 - Do not add an idle daemon, MCP requirement, Node/Python runtime or CGO
   dependency.
 

@@ -29,8 +29,11 @@ you run a shell command.
   and `unknown` are not success, even when a result string is present.
 - Do not change `--policy`, add a sandbox bypass, or retry a failed job. Report
   the job ID, state, error code and log path, then stop.
-- Never add `--admit-experimental` for Qwen or agy unless the user explicitly
-  asks for that documented-only path after being told it is not certified.
+- Never add `--admit-experimental` for Qwen, agy or ACP unless the user
+  explicitly asks for that documented-only path after being told it is not
+  certified.
+- Never choose or change an `--acp-command`, and never approve an ACP
+  permission request on the user's behalf.
 - Always pass `--as <alias>` when acting as a registered session.
 - Do not put secrets, credentials, tokens, private keys, private network
   details, or personal data in a message body. Bodies are stored locally and

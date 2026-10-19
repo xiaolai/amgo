@@ -64,7 +64,8 @@ func TestSkillKeepsPermissionBoundary(t *testing.T) {
 		"Never run `amgo run`, `amgo continue`, or `amgo cancel`",
 		"`completed` is the only success state",
 		"Do not change `--policy`",
-		"Never add `--admit-experimental` for Qwen or agy",
+		"Never add `--admit-experimental` for Qwen, agy or ACP",
+		"Never choose or change an `--acp-command`",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("skill no longer states: %q", want)
@@ -88,7 +89,8 @@ func TestAgentsFallbackKeepsPermissionBoundary(t *testing.T) {
 		"A skill file is instructions to an agent, not a permission control",
 		"Never start, continue or cancel a job unless the user asked for that exact",
 		"Only `completed` is success",
-		"Never add `--admit-experimental` for Qwen or agy",
+		"Never add `--admit-experimental` for Qwen, agy or ACP",
+		"Never choose an `--acp-command`",
 	} {
 		if !strings.Contains(docs, want) {
 			t.Errorf("fallback instructions no longer state: %q", want)
