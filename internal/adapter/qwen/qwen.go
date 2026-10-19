@@ -1,5 +1,7 @@
-// Package qwen reports Qwen capability. The binary is absent locally, so the
-// adapter stays unavailable: documentation alone never enables a live lane.
+// Package qwen implements the documented Qwen Code cross-session protocol and
+// headless jobs. The protocol code is fixture-tested; no native gate is
+// possible without the qwen binary, so mutation paths require the operator's
+// explicit experimental admission.
 package qwen
 
 import (
@@ -21,21 +23,30 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		Adapter:  model.AdapterQwen,
 		Maturity: model.MaturityDocumented,
 		Constraints: []string{
-			"qwen binary is unavailable; install and certify a pinned version before enabling jobs or peer messaging",
-			"documented flags and protocol schemas are not native evidence",
+			"cross-session schema 1 / msgV 1 is implemented from the official protocol; no native gate exists",
+			"the sender presents only the target registry ipcToken; it never claims own-process or controller authority",
+			"fromMode is omitted, so a policy-matching receiver holds the message for review by default",
+			"receipts are best-effort and observed only for a short bounded window",
+			"outside Linux the registry leaves procStart/pidNs null, so PID reuse is not distinguishable",
+			"mutation paths require --admit-experimental",
 		},
 	}
+	caps.LiveMessaging = true
 	if _, err := exec.LookPath("qwen"); err != nil {
+		caps.Constraints = append(caps.Constraints,
+			"qwen binary is unavailable; messaging is documented and fixture-tested, jobs are disabled")
 		return caps, nil
 	}
-	caps.Constraints = []string{"qwen binary found but no pinned fixture or native result gate exists; the lane stays disabled"}
+	caps.Jobs = true
+	caps.Resume = true
+	caps.Constraints = append(caps.Constraints, "qwen binary found; version and native behavior are not yet certified")
 	return caps, nil
 }
 
 func (a *Adapter) Discover(ctx context.Context, req adapter.DiscoverRequest) ([]model.Candidate, error) {
-	return nil, nil
+	return candidates(req.QwenHome), nil
 }
 
 func (a *Adapter) Send(ctx context.Context, req adapter.SendRequest) (adapter.SendResult, error) {
-	return adapter.SendResult{}, model.NewError(model.ErrUnsupported, "qwen peer messaging is not implemented")
+	return send(ctx, req)
 }

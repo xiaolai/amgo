@@ -88,15 +88,16 @@ const (
 
 // Native dispositions are provider evidence, separate from message state.
 const (
-	DispositionUnknown = "unknown"
-	DispositionQueued  = "queued"
-	DispositionStarted = "started"
-	DispositionHeld    = "held"
-	DispositionRefused = "refused"
-	DispositionDenied  = "denied"
-	DispositionExpired = "expired"
-	DispositionDropped = "dropped"
-	DispositionLocal   = "local"
+	DispositionUnknown      = "unknown"
+	DispositionQueued       = "queued"
+	DispositionStarted      = "started"
+	DispositionHeld         = "held"
+	DispositionRefused      = "refused"
+	DispositionDenied       = "denied"
+	DispositionExpired      = "expired"
+	DispositionDropped      = "dropped"
+	DispositionMisaddressed = "misaddressed"
+	DispositionLocal        = "local"
 )
 
 type Message struct {
