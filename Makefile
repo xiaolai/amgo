@@ -1,7 +1,8 @@
-.PHONY: build test race vet bench fmt contention lifecycle native secrets release release-check
+.PHONY: build test race vet bench fmt contention lifecycle native secrets release release-check vulncheck
 
 VERSION ?= 0.1.0
 LDFLAGS := -s -w -X amgo/internal/cli.Version=$(VERSION)
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o dist/amgo ./cmd/amgo
@@ -36,6 +37,9 @@ release:
 
 release-check:
 	AMGO_RELEASE=1 ./scripts/release-check.sh
+
+vulncheck:
+	go run $(GOVULNCHECK) ./...
 
 fmt:
 	gofmt -w cmd internal benchmark tests
