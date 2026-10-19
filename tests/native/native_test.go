@@ -326,6 +326,52 @@ func (g *claudeGate) keys(keys ...string) {
 	}
 }
 
+func (g *claudeGate) typeText(text string) {
+	_ = exec.Command("tmux", "send-keys", "-l", "-t", g.session, "--", text).Run()
+	probe := text
+	if len(probe) > 40 {
+		probe = probe[:40]
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(g.pane(false), probe) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	time.Sleep(400 * time.Millisecond)
+	_ = exec.Command("tmux", "send-keys", "-t", g.session, "Enter").Run()
+}
+
+func (g *claudeGate) status() string {
+	files, _ := filepath.Glob(filepath.Join(g.config, "sessions", "*.json"))
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		var rec struct {
+			SessionID string `json:"sessionId"`
+			Status    string `json:"status"`
+		}
+		if json.Unmarshal(raw, &rec) == nil && rec.SessionID == g.nativeID {
+			return rec.Status
+		}
+	}
+	return ""
+}
+
+func (g *claudeGate) waitStatus(want string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if g.status() == want {
+			return true
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return false
+}
+
 func (g *claudeGate) onboard() {
 	deadline := time.Now().Add(90 * time.Second)
 	last := ""
@@ -1032,4 +1078,29 @@ func TestClaudeBudgetReplayCloseExpiry(t *testing.T) {
 	e, code = sendText(t, g.work, home, "claude-budget", "expired message",
 		"--accept-unknown-delivery", "--conversation", "short", "--idempotency-key", "k-budget-4")
 	mustCode(t, e, code, model.ErrConversationClosed, "send to an expired conversation")
+}
+
+func TestClaudeBusyQueue(t *testing.T) {
+	g := startClaude(t, "accept")
+	home := t.TempDir()
+	rows := discover(t, g.work, home, g.config, "")
+	pickCandidate(t, rows, model.AdapterClaude, g.nativeID)
+	joinClaude(t, g.work, home, g.config, g.nativeID, "claude-busy")
+
+	g.typeText("Use the shell tool to run exactly: sleep 25. After it finishes, reply with exactly BUSY-DONE")
+	if !g.waitTranscript("sleep 25", 20*time.Second) {
+		t.Fatalf("busy prompt was not submitted; pane=%s", g.pane(true))
+	}
+	if !g.waitStatus("busy", 30*time.Second) {
+		t.Fatalf("session did not become busy after submitting the prompt; status=%q", g.status())
+	}
+
+	nonce := randomLabel("claude-busy")
+	e, code := sendText(t, g.work, home, "claude-busy",
+		fmt.Sprintf("amgo native delivery probe %s. Reply with exactly: ACK %s", nonce, nonce),
+		"--accept-unknown-delivery")
+	mustOK(t, e, code, "busy send")
+	if !g.waitTranscript("ACK "+nonce, 150*time.Second) {
+		t.Fatal("busy session did not deliver the nonce")
+	}
 }

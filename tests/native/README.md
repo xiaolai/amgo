@@ -25,6 +25,7 @@ skip when `claude` or `tmux` is unavailable.
 | Gate | Test | What it proves |
 |---|---|---|
 | Claude accept | `TestClaudeAcceptNonceAndRecipientAck` | A nonce reaches the disposable session transcript; an explicit recipient ack is recorded with `provenance=recipient` |
+| Claude busy | `TestClaudeBusyQueue` | A nonce sent while the session is running a turn is still delivered and acknowledged |
 | Claude hold | `TestClaudeHoldDoesNotDeliver` | A held nonce never reaches the transcript; amgo reports `submitted`, never acknowledged |
 | Claude refuse | `TestClaudeRefuseDoesNotDeliver` | A refused nonce never reaches the transcript; amgo reports `submitted` |
 | Claude dead target | `TestClaudeDeadTargetReplayAndNewSend` | A new send after process death is `target_unavailable`; an identical replay is served from durable membership without a native send |
