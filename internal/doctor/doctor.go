@@ -46,7 +46,10 @@ func Run(ctx context.Context, home, version string, adapters map[string]adapter.
 
 func AdapterCapabilities(ctx context.Context, adapters map[string]adapter.Adapter) []model.Capabilities {
 	var out []model.Capabilities
-	for _, name := range []string{model.AdapterClaude, model.AdapterCodex, model.AdapterOpenCode, model.AdapterAgy, model.AdapterQwen} {
+	for _, name := range []string{
+		model.AdapterClaude, model.AdapterCodex, model.AdapterOpenCode,
+		model.AdapterAgy, model.AdapterQwen, model.AdapterACP,
+	} {
 		if a, ok := adapters[name]; ok {
 			pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			caps, err := a.Probe(pctx)
