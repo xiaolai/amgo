@@ -17,7 +17,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1335,5 +1337,131 @@ func TestOpenCodeJobContinuation(t *testing.T) {
 		!strings.Contains(jobDataString(t, second, "result"), nonce2) ||
 		jobDataString(t, second, "native_session_id") != native {
 		t.Fatalf("continued job=%v", second)
+	}
+}
+
+func TestOpenCodeExistingSessionSend(t *testing.T) {
+	if _, err := exec.LookPath("opencode"); err != nil {
+		t.Skip("opencode binary is unavailable")
+	}
+	ws := t.TempDir()
+	if out, err := exec.Command("git", "-C", ws, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	portLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := portLn.Addr().(*net.TCPAddr).Port
+	_ = portLn.Close()
+	password := "amgo-" + ids.NewUUID()
+	server := exec.Command("opencode", "serve", "--port", strconv.Itoa(port), "--hostname", "127.0.0.1")
+	server.Dir = ws
+	server.Env = append(os.Environ(), "OPENCODE_SERVER_PASSWORD="+password)
+	server.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var serverLog bytes.Buffer
+	server.Stdout = &serverLog
+	server.Stderr = &serverLog
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if server.Process != nil {
+			_ = syscall.Kill(-server.Process.Pid, syscall.SIGTERM)
+			done := make(chan struct{})
+			go func() { _ = server.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				_ = syscall.Kill(-server.Process.Pid, syscall.SIGKILL)
+				<-done
+			}
+		}
+	})
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, _ := http.NewRequest(http.MethodGet, base+"/global/health", nil)
+	req.SetBasicAuth("opencode", password)
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		resp, err := client.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == 200 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("OpenCode server did not become healthy: %s", tailText(serverLog.String(), 1000))
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	createReq, _ := http.NewRequest(http.MethodPost, base+"/session", strings.NewReader("{}"))
+	createReq.Header.Set("Content-Type", "application/json")
+	createReq.SetBasicAuth("opencode", password)
+	resp, err := client.Do(createReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("create session HTTP %d: %s", resp.StatusCode, raw)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil || created.ID == "" {
+		t.Fatalf("create session: %v: %s", err, raw)
+	}
+
+	home := t.TempDir()
+	env := []string{"OPENCODE_SERVER_PASSWORD=" + password}
+	alias := "oc-" + ids.NewUUID()[:8]
+	code, out := runAmgoEnv(t, env, "--home", home, "join", "opencode", "--name", alias,
+		"--session", created.ID, "--endpoint", base)
+	if code != 0 {
+		t.Fatalf("join exit=%d: %s", code, out)
+	}
+	nonce1 := "OPENCODE-SEND-" + ids.NewUUID()
+	nonce2 := "OPENCODE-QUEUE-" + ids.NewUUID()
+	// Send with prompts on stdin, one process each.
+	for _, nonce := range []string{nonce1, nonce2} {
+		cmd := exec.Command(amgoBin, "--home", home, "--json", "send", alias, "--stdin", "--accept-unknown-delivery")
+		cmd.Env = append(os.Environ(), env...)
+		cmd.Stdin = strings.NewReader("Reply with exactly " + nonce + " and nothing else.")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("send %s: %v stderr=%s", nonce, err, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), `"submission":"submitted"`) {
+			t.Fatalf("send %s envelope=%s", nonce, stdout.String())
+		}
+	}
+
+	msgURL := fmt.Sprintf("%s/session/%s/message?limit=50", base, created.ID)
+	deadline = time.Now().Add(3 * time.Minute)
+	for {
+		req, _ := http.NewRequest(http.MethodGet, msgURL, nil)
+		req.SetBasicAuth("opencode", password)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("list messages: %v", err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != 200 {
+			t.Fatalf("list messages HTTP %d: %s", resp.StatusCode, body)
+		}
+		if bytes.Contains(body, []byte(nonce1)) && bytes.Contains(body, []byte(nonce2)) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("prompts did not reach the OpenCode session: %s", tailText(string(body), 1500))
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 }

@@ -1,7 +1,8 @@
 # Native delivery gates
 
 These tests exercise real Claude Code, Codex and OpenCode sessions and jobs.
-They are opt-in and never run in the default suite.
+They are opt-in and never run in the default suite. Qwen and agy have no native
+gate here: their lanes are documented-only and fixture-tested.
 
 ```sh
 AMGO_NATIVE=1 go test -tags native -count=1 -timeout 20m ./tests/native -v
@@ -39,6 +40,7 @@ skip when `claude` or `tmux` is unavailable.
 | Codex job / continue / cancel | `TestCodexJobContinuationAndCancel` | A background `codex exec` job completes with a nonce; continuation reuses the same native thread; a second job on the checkout is `workspace_busy`; cancellation kills the sandbox's `sleep` command, not just the leader |
 | Claude job / continue | `TestClaudeJobContinuation` | A headless `claude -p` job completes with a nonce; continuation reuses the same session ID |
 | OpenCode job / continue | `TestOpenCodeJobContinuation` | A locally owned `opencode run` job completes with a nonce; `--session` continuation reuses the same session |
+| OpenCode existing-session send | `TestOpenCodeExistingSessionSend` | A loopback server with basic auth accepts two prompts through `amgo send`; both nonces reach the session message history, including one sent while the first turn is busy |
 
 ## Gates that remain manual
 
@@ -59,7 +61,10 @@ cannot force reliably. Keep the code guards and record evidence when run.
    reloaded between the loaded check and the queue call. This is documented as
    an accepted limitation; no test can prove its absence.
 5. **agy structured job.** The installed 1.4.2 exposes structured stream-json,
-   but the current account is not eligible in this location. The job lane stays
-   disabled until a native result with a nonce is captured.
-6. **Qwen job and peer messaging.** The binary is absent. No flag or protocol
-   claim is made until an installed, pinned version passes a native gate.
+   and the adapter follows the official headless documentation, but the current
+   account is not eligible in this location. The lane stays documented-only
+   until a native result with a nonce is captured.
+6. **Qwen job and peer messaging.** The binary is absent. The adapter follows
+   the official headless and cross-session protocols and passes fixture tests;
+   no native claim is made until an installed, pinned version passes a gate.
+   Mutation paths require `--admit-experimental`.
