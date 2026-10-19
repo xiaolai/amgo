@@ -1,7 +1,7 @@
 .PHONY: build test race vet bench fmt contention lifecycle native secrets release release-check vulncheck
 
-VERSION ?= 0.1.0
-LDFLAGS := -s -w -X amgo/internal/cli.Version=$(VERSION)
+VERSION ?= 0.1.1
+LDFLAGS := -s -w -X amgo/internal/version.Version=$(VERSION)
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 build:

@@ -18,6 +18,7 @@ import (
 	"amgo/internal/config"
 	"amgo/internal/ids"
 	"amgo/internal/model"
+	"amgo/internal/version"
 )
 
 const (
@@ -343,7 +344,7 @@ func preSend(code, detail string) adapter.SendResult {
 func handshake(ctx context.Context, c *client) error {
 	var res initializeResponse
 	if err := c.call(ctx, "initialize", initializeParams{
-		ClientInfo:   clientInfo{Name: "amgo", Title: "amgo", Version: "0.1.0"},
+		ClientInfo:   clientInfo{Name: "amgo", Title: "amgo", Version: version.Version},
 		Capabilities: capabilities{ExperimentalAPI: true},
 	}, &res); err != nil {
 		return err

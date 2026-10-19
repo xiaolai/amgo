@@ -24,9 +24,11 @@ import (
 	"amgo/internal/render"
 	"amgo/internal/session"
 	"amgo/internal/store"
+	"amgo/internal/version"
 )
 
-var Version = "0.1.0"
+// Version is the release version shared with adapters and tests.
+var Version = version.Version
 
 type App struct {
 	In       io.Reader

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Cross-compiles amgo for the four release platforms into dist/.
-# VERSION is injected into internal/cli.Version, so `amgo version` reports it.
+# VERSION is injected into internal/version.Version, so `amgo version` reports it.
 # Called by `make release`.
 set -euo pipefail
 
 : "${VERSION:?set VERSION}"
 dist="${DIST:-dist}"
 version="${VERSION#v}"
-ldflags="-s -w -X amgo/internal/cli.Version=${version}"
+ldflags="-s -w -X amgo/internal/version.Version=${version}"
 
 rm -rf -- "$dist"
 mkdir -p -- "$dist"
