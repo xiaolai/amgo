@@ -294,6 +294,91 @@ func TestMigrationFailureRollsBack(t *testing.T) {
 	}
 }
 
+func TestProductionMigrationChainIsComplete(t *testing.T) {
+	for v := 1; v < schemaVersion; v++ {
+		if productionMigrations[v] == nil {
+			t.Fatalf("schema %d has no production migration", v)
+		}
+	}
+}
+
+func TestV1ToV2CreatesJobEventBuckets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.db")
+	st, err := Open(path, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := st.CreateJob(model.Job{
+		ID: "j_v1", Adapter: "fake", Workspace: "/work", Prompt: "p", PromptSHA256: "h",
+		State: model.JobCreated, CreatedAt: now, Deadline: now.Add(time.Hour),
+	}, now); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	rawUpdate(t, path, func(tx *bolt.Tx) error {
+		for _, name := range [][]byte{bucketJobEvents, bucketJobEventByJob} {
+			if err := tx.DeleteBucket(name); err != nil {
+				return err
+			}
+		}
+		var sm SchemaMeta
+		if err := getJSON(tx.Bucket(bucketMeta), []byte("schema"), &sm); err != nil {
+			return err
+		}
+		sm.Version = 1
+		sm.MinReader = 1
+		return putJSON(tx.Bucket(bucketMeta), []byte("schema"), sm)
+	})
+
+	st, err = Open(path, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := st.GetJob("j_v1")
+	_ = st.Close()
+	if err != nil || job.ID != "j_v1" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	if sm := rawReadSchema(t, path); sm.Version != schemaVersion {
+		t.Fatalf("schema=%+v", sm)
+	}
+	backups := backupFiles(path)
+	if len(backups) != 1 {
+		t.Fatalf("backups=%v", backups)
+	}
+	backup, err := bolt.Open(backups[0], 0o600, &bolt.Options{ReadOnly: true, Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backup.Close()
+	if err := backup.View(func(tx *bolt.Tx) error {
+		sm, err := readSchema(tx)
+		if err != nil {
+			return err
+		}
+		if sm.Version != 1 {
+			return errors.New("backup schema is not v1")
+		}
+		if tx.Bucket(bucketJobEvents) != nil {
+			return errors.New("backup gained the v2 buckets")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.View(verifyBuckets); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+}
+
 func TestMissingMigrationStepRefusedBeforeBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	st, err := Open(path, 2*time.Second)

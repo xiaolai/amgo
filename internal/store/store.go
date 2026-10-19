@@ -41,6 +41,8 @@ var (
 	bucketJobs           = []byte("jobs")
 	bucketLeases         = []byte("leases")
 	bucketArtifacts      = []byte("artifacts")
+	bucketJobEvents      = []byte("job_events")
+	bucketJobEventByJob  = []byte("job_event_by_job")
 )
 
 var allBuckets = [][]byte{
@@ -49,9 +51,10 @@ var allBuckets = [][]byte{
 	bucketAttempts, bucketAttemptByMsg, bucketReservations, bucketResByMsg,
 	bucketEvents, bucketEventByMsg, bucketEventByAttempt, bucketIdem, bucketIdemByMsg,
 	bucketReceipts, bucketReceiptByMsg, bucketJobs, bucketLeases, bucketArtifacts,
+	bucketJobEvents, bucketJobEventByJob,
 }
 
-const schemaVersion = 1
+const schemaVersion = 2
 
 // migration advances a database from one schema version to the next. The map
 // is keyed by the version being migrated FROM. Add a step and bump
@@ -60,12 +63,24 @@ const schemaVersion = 1
 type migration func(*bolt.Tx) error
 
 var productionMigrations = map[int]migration{
-	// To add schema 2:
-	//   1. bump schemaVersion to 2;
-	//   2. add 1: migrateV1ToV2 below, creating any new buckets/keys;
-	//   3. add a migration test that opens a v1 database, migrates, and
-	//      checks both the backup (still v1) and the migrated database.
+	1: migrateV1ToV2,
+	// To add schema 3:
+	//   1. bump schemaVersion to 3;
+	//   2. add 2: migrateV2ToV3 below, creating any new buckets/keys;
+	//   3. add a migration test that opens a v2 database, migrates, and
+	//      checks both the backup (still v2) and the migrated database.
 	// A missing step fails closed before creating a backup.
+}
+
+// migrateV1ToV2 adds the append-only job-event buckets. A v1 database already
+// has the jobs, leases and artifacts buckets, so no existing record moves.
+func migrateV1ToV2(tx *bolt.Tx) error {
+	for _, name := range [][]byte{bucketJobEvents, bucketJobEventByJob} {
+		if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type SchemaMeta struct {

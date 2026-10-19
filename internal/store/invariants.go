@@ -1,7 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -137,6 +140,82 @@ func (s *Store) CheckInvariants(now time.Time) ([]Violation, error) {
 			return err
 		}
 
+		// Jobs, leases and artifacts are additive records. Active jobs must be
+		// leased; terminal jobs must carry a finish time; every owned path must
+		// remain under the artifacts root.
+		jobs := tx.Bucket(bucketJobs)
+		leased := map[string]bool{}
+		if err := scanPrefixN(tx.Bucket(bucketLeases), nil, 0, func(_, v []byte) error {
+			var l model.Lease
+			if err := decodeJSON(v, &l); err != nil {
+				return err
+			}
+			leased[l.JobID] = true
+			if jobs.Get([]byte(l.JobID)) == nil {
+				out = append(out, Violation{"lease_orphan_job", l.JobID})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := scanPrefixN(jobs, nil, 0, func(_, v []byte) error {
+			var j model.Job
+			if err := decodeJSON(v, &j); err != nil {
+				return err
+			}
+			if j.State.Terminal() && j.FinishedAt == nil {
+				out = append(out, Violation{"job_terminal_without_finish", j.ID})
+			}
+			if !j.State.Terminal() {
+				if now.After(j.Deadline.Add(10 * time.Minute)) {
+					out = append(out, Violation{"job_overdue", j.ID})
+				}
+				if !leased[j.ID] && now.Sub(j.UpdatedAt) > time.Minute {
+					out = append(out, Violation{"job_active_without_lease", j.ID})
+				}
+			}
+			if !ownedArtifactPath(j.LogPath) {
+				out = append(out, Violation{"job_log_outside_artifacts", j.ID})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := scanPrefixN(tx.Bucket(bucketArtifacts), nil, 0, func(k, v []byte) error {
+			i := bytes.IndexByte(k, 0)
+			if i <= 0 {
+				out = append(out, Violation{"artifact_key_malformed", string(k)})
+				return nil
+			}
+			jobID := string(k[:i])
+			if jobs.Get([]byte(jobID)) == nil {
+				out = append(out, Violation{"artifact_orphan_job", jobID})
+			}
+			var a model.Artifact
+			if err := decodeJSON(v, &a); err != nil {
+				return err
+			}
+			if !ownedArtifactPath(a.Path) {
+				out = append(out, Violation{"artifact_outside_artifacts", a.ID})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if err := scanPrefixN(tx.Bucket(bucketJobEventByJob), nil, 0, func(k, v []byte) error {
+			i := bytes.IndexByte(k, 0)
+			if i <= 0 {
+				out = append(out, Violation{"job_event_key_malformed", string(k)})
+				return nil
+			}
+			if jobs.Get(k[:i]) == nil {
+				out = append(out, Violation{"job_event_orphan_job", string(k[:i])})
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+
 		if err := scanPrefixN(idem, nil, 0, func(_, v []byte) error {
 			var r model.IdemRecord
 			if err := decodeJSON(v, &r); err != nil {
@@ -155,6 +234,17 @@ func (s *Store) CheckInvariants(now time.Time) ([]Violation, error) {
 		return nil
 	})
 	return out, err
+}
+
+func ownedArtifactPath(rel string) bool {
+	if rel == "" {
+		return true
+	}
+	clean := filepath.Clean(rel)
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return strings.HasPrefix(clean, "artifacts"+string(filepath.Separator))
 }
 
 func loadConversation(b *bolt.Bucket, id string) (model.Conversation, error) {
