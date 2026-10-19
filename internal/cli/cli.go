@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"amgo/internal/adapter"
+	"amgo/internal/adapter/acp"
 	"amgo/internal/adapter/agy"
 	"amgo/internal/adapter/claude"
 	"amgo/internal/adapter/codex"
@@ -98,6 +99,7 @@ func runWith(args []string, in io.Reader, out, errOut io.Writer, extra map[strin
 		model.AdapterOpenCode: opencode.New(),
 		model.AdapterAgy:      agy.New(),
 		model.AdapterQwen:     qwen.New(),
+		model.AdapterACP:      acp.New(),
 	}
 	for name, a := range extra {
 		app.Adapters[name] = a
@@ -236,6 +238,7 @@ var commandValueFlags = map[string]bool{
 	"prompt-file": true, "model": true, "effort": true, "policy": true,
 	"deadline": true, "after": true, "grace": true,
 	"qwen-home": true, "endpoint": true, "target": true,
+	"acp-command": true, "acp-arg": true,
 }
 
 func parseGlobals(args []string) (globalFlags, []string, error) {

@@ -266,6 +266,7 @@ func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, er
 		JobID: "validate", Workspace: orig.Workspace, Prompt: in.Prompt,
 		Model: orig.Model, Effort: orig.Effort, Policy: orig.Policy,
 		NativeSessionID: orig.NativeSessionID, Timeout: timeout,
+		ACPCommand: orig.ACPCommand, ACPArgs: orig.ACPArgs,
 		AdmitExperimental: in.AdmitExperimental,
 	}); err != nil {
 		return model.Job{}, err
@@ -275,6 +276,7 @@ func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, er
 		Workspace: orig.Workspace, CheckoutID: orig.CheckoutID, RepoID: orig.RepoID,
 		Prompt: in.Prompt, PromptSHA256: hashPrompt(in.Prompt), PromptBytes: len(in.Prompt),
 		Model: orig.Model, Effort: orig.Effort, Policy: orig.Policy,
+		ACPCommand: orig.ACPCommand, ACPArgs: append([]string(nil), orig.ACPArgs...),
 		AdmitExperimental: in.AdmitExperimental,
 		State:             model.JobCreated, CreatedAt: now, UpdatedAt: now,
 		Deadline: now.Add(timeout), NativeSessionID: orig.NativeSessionID,

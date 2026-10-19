@@ -39,11 +39,15 @@ func (a *App) cmdRun(ctx context.Context, args []string) int {
 	modelName := fs.String("model", "", "provider model")
 	effort := fs.String("effort", "", "provider reasoning effort")
 	policy := fs.String("policy", "default", "execution policy: default or review")
+	acpCommand := fs.String("acp-command", "", "ACP agent executable")
+	var acpArgs stringList
+	fs.Var(&acpArgs, "acp-arg", "ACP agent argument (repeatable)")
 	deadline := fs.String("deadline", "", "job deadline (default 15m)")
 	background := fs.Bool("background", false, "start a detached supervisor and return")
 	pos, err := parseCommand(fs, args, map[string]bool{
 		"cwd": true, "prompt-file": true, "text": true, "model": true,
 		"effort": true, "policy": true, "deadline": true,
+		"acp-command": true, "acp-arg": true,
 	})
 	if err != nil {
 		return a.fail("run", model.WrapError(model.ErrUsage, "invalid flags", err), nil)
@@ -71,6 +75,7 @@ func (a *App) cmdRun(ctx context.Context, args []string) int {
 		Adapter: pos[0], Workspace: *cwd, Prompt: prompt,
 		Model: *modelName, Effort: *effort, Policy: *policy,
 		Timeout: timeout, Background: *background,
+		ACPCommand: *acpCommand, ACPArgs: acpArgs,
 		AdmitExperimental: a.AdmitExperimental,
 	})
 	if err != nil {

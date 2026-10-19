@@ -48,6 +48,8 @@ type StartInput struct {
 	Policy            string
 	Timeout           time.Duration
 	Background        bool
+	ACPCommand        string
+	ACPArgs           []string
 	AdmitExperimental bool
 }
 
@@ -154,6 +156,7 @@ func (s *Service) Start(ctx context.Context, in StartInput) (model.Job, error) {
 	plan, err := ja.RunSpec(ctx, adapter.RunRequest{
 		JobID: ids.New("j"), Workspace: workspace, Prompt: in.Prompt,
 		Model: in.Model, Effort: in.Effort, Policy: policy, Timeout: timeout,
+		ACPCommand: in.ACPCommand, ACPArgs: append([]string(nil), in.ACPArgs...),
 		AdmitExperimental: in.AdmitExperimental,
 	})
 	if err != nil {
@@ -168,6 +171,7 @@ func (s *Service) Start(ctx context.Context, in StartInput) (model.Job, error) {
 		Workspace: workspace, CheckoutID: checkoutID, RepoID: repoID,
 		Prompt: in.Prompt, PromptSHA256: hex.EncodeToString(sum[:]), PromptBytes: len(in.Prompt),
 		Model: in.Model, Effort: in.Effort, Policy: policy,
+		ACPCommand: in.ACPCommand, ACPArgs: append([]string(nil), in.ACPArgs...),
 		AdmitExperimental: in.AdmitExperimental,
 		State:             model.JobCreated, CreatedAt: now, UpdatedAt: now,
 		Deadline: now.Add(timeout),

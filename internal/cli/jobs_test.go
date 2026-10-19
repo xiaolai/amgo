@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -202,5 +204,73 @@ func TestRunRefusesUnenforceablePolicyBeforeInvocation(t *testing.T) {
 	code, _, stderr = runJobCLI(t, "", "--home", home, "run", "codex", "--cwd", ws, "--policy", "bogus", "--text", "ok")
 	if code != 3 || !strings.Contains(stderr, "unknown execution policy") {
 		t.Fatalf("codex policy exit=%d stderr=%s", code, stderr)
+	}
+}
+
+// TestCLIACPAgent is a minimal ACP fixture process for the CLI test binary.
+func TestCLIACPAgent(t *testing.T) {
+	if os.Getenv("AMGO_CLI_ACP_FAKE") != "1" {
+		return
+	}
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 4096), 1<<20)
+	write := func(v any) {
+		raw, _ := json.Marshal(v)
+		_, _ = os.Stdout.Write(append(raw, '\n'))
+	}
+	for sc.Scan() {
+		var m struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+			continue
+		}
+		result := func(v any) { write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": v}) }
+		switch m.Method {
+		case "initialize":
+			result(map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true}})
+		case "session/new":
+			result(map[string]any{"sessionId": "sess-1"})
+		case "session/prompt":
+			for _, text := range []string{"hello ", "world"} {
+				write(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{
+					"sessionId": "sess-1",
+					"update":    map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}},
+				}})
+			}
+			result(map[string]any{"stopReason": "end_turn"})
+		default:
+			if len(m.ID) > 0 {
+				write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "error": map[string]any{"code": -32601, "message": "method not found"}})
+			}
+		}
+	}
+	os.Exit(0)
+}
+
+func TestRunACPDocumentedOnly(t *testing.T) {
+	t.Setenv("AMGO_CLI_ACP_FAKE", "1")
+	agent, err := filepath.Abs(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	ws := t.TempDir()
+	base := []string{"run", "acp", "--cwd", ws, "--text", "hello", "--acp-command", agent,
+		"--acp-arg=-test.run=TestCLIACPAgent", "--acp-arg=--"}
+	code, _, stderr := runJobCLI(t, "", append([]string{"--home", home}, base...)...)
+	if code != 6 || !strings.Contains(stderr, "documented-only") {
+		t.Fatalf("without admission exit=%d stderr=%s", code, stderr)
+	}
+	args := append([]string{"--home", home, "--json"}, base...)
+	args = append(args, "--admit-experimental")
+	code, env, stderr := runJobCLI(t, "", args...)
+	if code != 0 {
+		t.Fatalf("run exit=%d stderr=%s env=%+v", code, stderr, env)
+	}
+	if env.Data["state"] != string(model.JobCompleted) || env.Data["result"] != "hello world" ||
+		env.Data["native_session_id"] != "sess-1" {
+		t.Fatalf("data=%+v", env.Data)
 	}
 }
