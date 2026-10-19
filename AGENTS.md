@@ -60,6 +60,11 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
   `interrupted` or `unknown`; a clean exit without evidence is `partial`.
 - One lease per checkout. Signal only a process whose PID and start time match
   the recorded identity; cancellation is SIGINT-first.
+- Qwen and agy are documented-only. Never set `--admit-experimental` on a
+  peer's behalf or in a default.
+- Never store, log or export a Qwen `ipcToken`, and never present an
+  own-process or controller token.
+- OpenCode endpoints must be loopback; never accept a remote endpoint.
 - Do not add an idle daemon, MCP requirement, Node/Python runtime or CGO
   dependency.
 

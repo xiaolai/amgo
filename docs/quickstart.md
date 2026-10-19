@@ -175,6 +175,60 @@ exit.
 `continue` requires a terminal job with a native session ID, refuses while that
 session is registered as live, and creates a new job linked by `resume_of`.
 
+## OpenCode sessions
+
+The TUI's random port has no documented discovery file. Start a loopback
+server, or start the TUI with an explicit port, and name that endpoint:
+
+```sh
+opencode serve --port 4096            # or: opencode --port 4096
+amgo sessions --discover --endpoint http://127.0.0.1:4096
+amgo join opencode --name oc --session ses_... --endpoint http://127.0.0.1:4096
+printf '%s' 'Review the parser change.' | \
+  amgo send oc --stdin --accept-unknown-delivery
+```
+
+Set `OPENCODE_SERVER_PASSWORD` (and optionally
+`OPENCODE_SERVER_USERNAME`) in the environment when the server uses basic
+auth. amgo reads the credential at send time; it is never stored. HTTP 204
+means the prompt was accepted, not delivered or completed. Only a loopback
+endpoint is accepted.
+
+## Qwen sessions (documented-only)
+
+Qwen publishes a cross-session registry and an authenticated Unix-socket
+inbox. amgo implements that protocol from the official documentation; there is
+no native gate, so the send path requires the operator's admission:
+
+```sh
+amgo sessions --discover --qwen-home "${QWEN_HOME:-$HOME/.qwen}"
+amgo join qwen --name qw --session <qwen-session-id>
+printf '%s' 'Status?' | \
+  amgo send qw --stdin --admit-experimental --accept-unknown-delivery
+```
+
+amgo presents only the target registry `ipcToken`, never an own-process or
+controller token, and omits `fromMode`, so a receiver that applies mode parity
+holds the message for review. A delivery-status receipt is observed for a
+short bounded window; no receipt means delivery is unverified. On systems
+without Linux's `procStart`/`pidNs`, PID reuse is not distinguishable.
+
+## Qwen and agy jobs (documented-only)
+
+The headless commands are built from the official Qwen and Antigravity CLI
+documentation. They fail closed without the operator flag, and neither is
+native-certified here:
+
+```sh
+amgo --admit-experimental run qwen --cwd . --prompt-file task.txt
+amgo --admit-experimental run agy --cwd . --prompt-file task.txt --effort high
+```
+
+Qwen documents no reasoning-effort flag, so `--effort` is refused. agy exits
+with an eligibility error on the current account. Neither path adds a
+permission bypass. Review policy is refused for both because no enforceable
+read-only sandbox is documented and certified.
+
 ## Honest limits
 
 - Claude has no observable native receipt for an external sender. Holds,
@@ -190,7 +244,12 @@ session is registered as live, and creates a new job linked by `resume_of`.
   `needs_action` or `partial`, never `completed`.
 - Job logs are private (0600) and capped at 100 MiB with explicit truncation.
   They can contain model output and tool output.
-- agy jobs are disabled because the current account is not eligible; Qwen is
-  disabled because the binary is absent.
+- Qwen and agy mutation paths are documented-only and refuse to run without
+  `--admit-experimental`; native behavior is not certified. agy's current
+  account is not eligible in this location.
+- Qwen registry tokens are read just in time; they are never stored, logged or
+  exported. On non-Linux systems PID reuse is not distinguishable.
+- OpenCode needs an explicit loopback endpoint because the TUI's random port
+  has no documented discovery file. HTTP 204 is acceptance only.
 - No amgo process survives a bounded command, wait or job.
 - Windows, SSH and remote hosts are not supported in v0.2.

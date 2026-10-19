@@ -1,7 +1,7 @@
 # amgo
 
-Native session messaging and owned jobs for existing Claude Code, Codex and
-OpenCode sessions.
+Native session messaging and owned jobs for existing Claude Code, Codex,
+OpenCode and Qwen sessions.
 
 [![ci](https://github.com/xiaolai/amgo/actions/workflows/ci.yml/badge.svg)](https://github.com/xiaolai/amgo/actions/workflows/ci.yml)
 
@@ -11,9 +11,11 @@ message through the provider's own local transport, and runs one owned
 non-interactive provider process with persistent state, bounded logs and
 confirmed cancellation.
 
-**v0.2.0** supports Claude Code and Codex messaging, and Claude Code, Codex and
-OpenCode jobs, on macOS and Linux. agy and Qwen stay disabled until a pinned
-native result gate passes.
+**v0.3.0** supports Claude Code and Codex messaging, Claude Code, Codex and
+OpenCode jobs, and explicit-endpoint OpenCode messaging on macOS and Linux.
+Qwen messaging and Qwen/agy jobs are implemented from the official protocols
+but are documented-only: they require `--admit-experimental` and are not
+native-certified.
 
 ## Why
 
@@ -120,7 +122,12 @@ state is not `unknown`.
 
 - Claude Code 2.1.248+ for Claude messaging.
 - Codex 0.163.x for Codex messaging and jobs; other minor releases fail closed.
-- OpenCode 1.19.3 for OpenCode jobs.
+- OpenCode 1.19.3 for OpenCode jobs and explicit-endpoint messaging.
+- Qwen Code for Qwen messaging/jobs; those paths are documented-only and need
+  `--admit-experimental`. The `qwen` binary is not required to send to an
+  existing Qwen session.
+- Antigravity CLI 1.4.2 for agy jobs, documented-only and subject to account
+  eligibility.
 - macOS or Linux. Windows is not supported in v0.2.
 - The same OS user as the target session. That user boundary is the trust
   boundary; amgo is not an authorization or sandbox boundary.
@@ -149,6 +156,7 @@ state is not `unknown`.
 | `result` | Read a terminal job's result and bounded log artifact |
 | `cancel` | Request cancellation and confirm process-group exit |
 | `continue` | Continue a stopped job's native session in a new job |
+| `integration` | Print an agent snippet or the JSON CLI contract |
 
 Run `amgo <command> --help` for flags. Commands support `--json` with a
 versioned envelope and stable exit codes; `export` always writes JSONL.
@@ -197,8 +205,12 @@ config, and keep amgo's state root owner-only.
 | Foreground/background jobs with leases, bounded logs and cancellation | implemented; native gates passing |
 | Codex and Claude job continuation | implemented; native gates passing |
 | OpenCode owned jobs and continuation | implemented; native gate passing |
-| agy structured jobs | blocked: account not eligible in this location |
-| Qwen jobs and peer messaging | blocked: binary not installed |
+| OpenCode explicit-endpoint messaging | implemented; native gate passing |
+| Qwen cross-session messaging | implemented from the official protocol; fixture-tested, no native gate |
+| Qwen headless jobs | implemented from the official docs; requires `--admit-experimental`, binary not installed here |
+| agy headless jobs | implemented from the official docs; requires admission, account not eligible here |
+| Integration snippets and JSON contract | implemented |
+| Optional ACP adapter (F-048) | not implemented; deferred as experimental |
 | Optional isolated worktrees (F-068) | later milestone |
 | Linux native certification and Windows | not claimed |
 

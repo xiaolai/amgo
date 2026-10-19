@@ -79,6 +79,26 @@ A job is an owned provider process, not an authorization grant.
 - A lost supervisor leaves `interrupted` or `unknown`, never `completed`.
   Detached unknown job records are retained by prune.
 
+## Documented-only adapters
+
+Qwen cross-session messaging and Qwen/agy jobs are implemented from official
+protocol documentation but have no native certification in this environment.
+
+- Every mutation path refuses to run without the operator's
+  `--admit-experimental`. Peer content cannot set that flag.
+- The Qwen registry `ipcToken` is a credential. amgo reads it just before a
+  send and never copies it into a target, candidate, log, export or error.
+  amgo never uses a session's own-process token or a user-minted controller
+  token, and it omits `fromMode` rather than claiming a review class.
+- Qwen delivery receipts are best-effort and observed only for a short window.
+  No receipt means unverified, never delivered. On systems without Linux's
+  `procStart`/`pidNs`, PID reuse is not distinguishable.
+- OpenCode endpoints must be loopback; a remote URL is refused. Basic-auth
+  credentials come from the environment at send time. HTTP 204 means accepted,
+  not delivered.
+- agy and Qwen job lanes start a real provider process only after admission.
+  They never add `--yolo`, `--dangerously-skip-permissions` or another bypass.
+
 ## Path and transport checks
 
 - Socket paths must be local, absolute, owner-only, and inside a private
