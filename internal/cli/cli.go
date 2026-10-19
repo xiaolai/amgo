@@ -14,11 +14,15 @@ import (
 	"time"
 
 	"amgo/internal/adapter"
+	"amgo/internal/adapter/agy"
 	"amgo/internal/adapter/claude"
 	"amgo/internal/adapter/codex"
+	"amgo/internal/adapter/opencode"
+	"amgo/internal/adapter/qwen"
 	"amgo/internal/config"
 	"amgo/internal/contract"
 	"amgo/internal/doctor"
+	"amgo/internal/job"
 	"amgo/internal/message"
 	"amgo/internal/model"
 	"amgo/internal/render"
@@ -31,19 +35,27 @@ import (
 var Version = version.Version
 
 type App struct {
-	In       io.Reader
-	Out      io.Writer
-	Err      io.Writer
-	Home     string
-	JSON     bool
-	Verbose  bool
-	NoColor  bool
-	Timeout  time.Duration
-	Adapters map[string]adapter.Adapter
-	Svc      *message.Service
+	In         io.Reader
+	Out        io.Writer
+	Err        io.Writer
+	Home       string
+	JSON       bool
+	Verbose    bool
+	NoColor    bool
+	Timeout    time.Duration
+	TimeoutSet bool
+	Adapters   map[string]adapter.Adapter
+	Svc        *message.Service
+	JobSvc     *job.Service
 }
 
 func Run(args []string, in io.Reader, out, errOut io.Writer) int {
+	return runWith(args, in, out, errOut, nil)
+}
+
+// runWith is the test seam for adapters. Production passes nil and gets the
+// registered provider set.
+func runWith(args []string, in io.Reader, out, errOut io.Writer, extra map[string]adapter.Adapter) int {
 	global, rest, gerr := parseGlobals(args)
 	if gerr != nil {
 		if global.json || wantsJSON(args) {
@@ -54,13 +66,14 @@ func Run(args []string, in io.Reader, out, errOut io.Writer) int {
 		return 2
 	}
 	app := &App{
-		In:      in,
-		Out:     out,
-		Err:     errOut,
-		JSON:    global.json,
-		Verbose: global.verbose,
-		NoColor: global.noColor,
-		Timeout: global.timeout,
+		In:         in,
+		Out:        out,
+		Err:        errOut,
+		JSON:       global.json,
+		Verbose:    global.verbose,
+		NoColor:    global.noColor,
+		Timeout:    global.timeout,
+		TimeoutSet: global.timeoutSet,
 	}
 	if app.Timeout <= 0 {
 		app.Timeout = 60 * time.Second
@@ -78,10 +91,17 @@ func Run(args []string, in io.Reader, out, errOut io.Writer) int {
 	}
 	app.Home = home
 	app.Adapters = map[string]adapter.Adapter{
-		model.AdapterClaude: claude.New(),
-		model.AdapterCodex:  codex.New(),
+		model.AdapterClaude:   claude.New(),
+		model.AdapterCodex:    codex.New(),
+		model.AdapterOpenCode: opencode.New(),
+		model.AdapterAgy:      agy.New(),
+		model.AdapterQwen:     qwen.New(),
+	}
+	for name, a := range extra {
+		app.Adapters[name] = a
 	}
 	app.Svc = message.New(app.Home, app.Adapters)
+	app.JobSvc = job.New(app.Home, app.Adapters)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -120,6 +140,22 @@ func Run(args []string, in io.Reader, out, errOut io.Writer) int {
 		return app.cmdPrune(rest[1:])
 	case "recover":
 		return app.cmdRecover(rest[1:])
+	case "run":
+		return app.cmdRun(ctx, rest[1:])
+	case "jobs":
+		return app.cmdJobs(rest[1:])
+	case "status":
+		return app.cmdStatus(ctx, rest[1:])
+	case "follow":
+		return app.cmdFollow(ctx, rest[1:])
+	case "result":
+		return app.cmdResult(ctx, rest[1:])
+	case "cancel":
+		return app.cmdCancel(ctx, rest[1:])
+	case "continue":
+		return app.cmdContinue(ctx, rest[1:])
+	case "__supervise":
+		return app.cmdSupervise(ctx, rest[1:])
 	default:
 		return app.fail("unknown command", model.NewError(model.ErrUsage, fmt.Sprintf("unknown command %q", rest[0])), map[string]any{"command": rest[0]})
 	}
@@ -149,6 +185,13 @@ Commands:
   export       export messages as JSONL
   prune        retention dry-run or delete
   recover      reconcile dead attempts and import the outcome journal
+  run          start an owned provider job
+  jobs         list owned jobs
+  status       inspect a job, its events and artifacts
+  follow       bounded wait for new job events
+  result       read a terminal job's evidence
+  cancel       request cancellation and confirm termination
+  continue     continue a stopped job's native session
 
 Global flags (accepted before or after the command):
   --json --home <dir> --timeout <dur> --verbose --no-color
@@ -156,11 +199,12 @@ Global flags (accepted before or after the command):
 }
 
 type globalFlags struct {
-	json    bool
-	home    string
-	timeout time.Duration
-	verbose bool
-	noColor bool
+	json       bool
+	home       string
+	timeout    time.Duration
+	timeoutSet bool
+	verbose    bool
+	noColor    bool
 }
 
 func wantsJSON(args []string) bool {
@@ -183,6 +227,8 @@ var commandValueFlags = map[string]bool{
 	"cwd": true, "thread": true, "file": true, "text": true, "as": true,
 	"conversation": true, "idempotency-key": true, "limit": true,
 	"until": true, "max-messages": true, "expires": true, "format": true,
+	"prompt-file": true, "model": true, "effort": true, "policy": true,
+	"deadline": true, "after": true, "grace": true,
 }
 
 func parseGlobals(args []string) (globalFlags, []string, error) {
@@ -232,12 +278,14 @@ func parseGlobals(args []string) (globalFlags, []string, error) {
 				return g, nil, err
 			}
 			g.timeout = d
+			g.timeoutSet = true
 		case strings.HasPrefix(arg, "--timeout=") || strings.HasPrefix(arg, "-timeout="):
 			d, err := time.ParseDuration(strings.SplitN(arg, "=", 2)[1])
 			if err != nil {
 				return g, nil, err
 			}
 			g.timeout = d
+			g.timeoutSet = true
 		default:
 			rest = append(rest, arg)
 		}
@@ -636,6 +684,10 @@ func (a *App) cmdLeave(args []string) int {
 // ---- send / reply ----
 
 func (a *App) readBody(ctx context.Context, stdin, file, text string) (string, error) {
+	return a.readBodyLabeled(ctx, stdin, file, text, "--file")
+}
+
+func (a *App) readBodyLabeled(ctx context.Context, stdin, file, text, fileFlag string) (string, error) {
 	n := 0
 	if stdin != "" {
 		n++
@@ -648,7 +700,7 @@ func (a *App) readBody(ctx context.Context, stdin, file, text string) (string, e
 	}
 	_ = stdin
 	if n != 1 {
-		return "", model.NewError(model.ErrUsage, "exactly one of --stdin, --file or --text is required")
+		return "", model.NewError(model.ErrUsage, "exactly one of --stdin, "+fileFlag+" or --text is required")
 	}
 	var b []byte
 	var err error
@@ -1024,8 +1076,10 @@ func (a *App) cmdPrune(args []string) int {
 				return a.fail("prune", model.WrapError(model.ErrInternal, "cannot inspect state", statErr), nil)
 			}
 			rep := store.PruneReport{DryRun: true}
-			return a.ok("prune", rep, func() {
-				fmt.Fprintf(a.Out, "prune dry_run=true messages=0 body_bytes=0 idempotency_deleted=0 compacted=false bytes_after=0\n")
+			jrep := store.JobPruneReport{DryRun: true}
+			data := map[string]any{"messages": rep, "jobs": jrep, "artifact_dirs_removed": 0}
+			return a.ok("prune", data, func() {
+				fmt.Fprintf(a.Out, "prune dry_run=true messages=0 body_bytes=0 idempotency_deleted=0 jobs=0 job_events=0 job_artifacts=0 artifact_dirs_removed=0 compacted=false bytes_after=0\n")
 			})
 		}
 	} else if err := a.maybeRecover(); err != nil {
@@ -1046,6 +1100,17 @@ func (a *App) cmdPrune(args []string) int {
 	if err != nil {
 		return a.fail("prune", err, nil)
 	}
+	jrep, err := st.PruneJobs(now, now.Add(-30*24*time.Hour), dryRun)
+	if err != nil {
+		return a.fail("prune", err, nil)
+	}
+	removedDirs := 0
+	if !dryRun {
+		removedDirs, err = removeJobArtifactDirs(a.Home, jrep.JobIDs)
+		if err != nil {
+			return a.fail("prune", err, map[string]any{"messages": rep, "jobs": jrep})
+		}
+	}
 	if *compact && *yes && !*dry {
 		_ = st.Close()
 		size, cerr := store.Compact(config.DBPath(a.Home))
@@ -1055,8 +1120,13 @@ func (a *App) cmdPrune(args []string) int {
 		rep.Compacted = true
 		rep.BytesAfter = size
 	}
-	return a.ok("prune", rep, func() {
-		fmt.Fprintf(a.Out, "prune dry_run=%v messages=%d body_bytes=%d idempotency_deleted=%d compacted=%v bytes_after=%d\n", rep.DryRun, rep.Messages, rep.BodyBytes, rep.IdempotencyDeleted, rep.Compacted, rep.BytesAfter)
+	data := map[string]any{
+		"messages": rep, "jobs": jrep, "artifact_dirs_removed": removedDirs,
+	}
+	return a.ok("prune", data, func() {
+		fmt.Fprintf(a.Out, "prune dry_run=%v messages=%d body_bytes=%d idempotency_deleted=%d jobs=%d job_events=%d job_artifacts=%d artifact_dirs_removed=%d compacted=%v bytes_after=%d\n",
+			rep.DryRun, rep.Messages, rep.BodyBytes, rep.IdempotencyDeleted,
+			jrep.Jobs, jrep.Events, jrep.Artifacts, removedDirs, rep.Compacted, rep.BytesAfter)
 	})
 }
 

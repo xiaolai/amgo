@@ -70,8 +70,11 @@ func ExitCode(err error) int {
 		return 7
 	case model.ErrDeadlineExceeded, model.ErrDispatchDeadline:
 		return 9
-	case model.ErrStoreBusy, model.ErrRefundPending:
+	case model.ErrStoreBusy, model.ErrRefundPending, model.ErrWorkspaceBusy:
 		return 10
+	case model.ErrProviderFailed, model.ErrProviderNeedsAction, model.ErrProcessLost,
+		model.ErrEventTooLarge, model.ErrEventParse:
+		return 8
 	case model.ErrStateIncompatible:
 		return 11
 	case model.ErrInterrupted:
