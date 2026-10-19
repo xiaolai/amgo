@@ -143,7 +143,7 @@ func runWith(args []string, in io.Reader, out, errOut io.Writer, extra map[strin
 	case "prune":
 		return app.cmdPrune(rest[1:])
 	case "recover":
-		return app.cmdRecover(rest[1:])
+		return app.cmdRecover(ctx, rest[1:])
 	case "run":
 		return app.cmdRun(ctx, rest[1:])
 	case "jobs":
@@ -1259,7 +1259,7 @@ func (a *App) cmdPrune(args []string) int {
 	})
 }
 
-func (a *App) cmdRecover(args []string) int {
+func (a *App) cmdRecover(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
 	_, err := parseCommand(fs, args, nil)
@@ -1274,8 +1274,16 @@ func (a *App) cmdRecover(args []string) int {
 	if err != nil {
 		return a.fail("recover", err, map[string]any{"reconciled": n, "journal_imported": imported})
 	}
-	return a.ok("recover", map[string]any{"reconciled": n, "journal_imported": imported}, func() {
-		fmt.Fprintf(a.Out, "reconciled %d attempts; imported %d journal outcomes\n", n, imported)
+	jobs, err := a.JobSvc.Recover(ctx)
+	if err != nil {
+		return a.fail("recover", err, map[string]any{
+			"reconciled": n, "jobs_recovered": jobs, "journal_imported": imported,
+		})
+	}
+	data := map[string]any{"reconciled": n, "jobs_recovered": jobs, "journal_imported": imported}
+	return a.ok("recover", data, func() {
+		fmt.Fprintf(a.Out, "reconciled %d attempts; recovered %d jobs; imported %d journal outcomes\n",
+			n, jobs, imported)
 	})
 }
 

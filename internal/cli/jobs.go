@@ -208,17 +208,22 @@ func (a *App) cmdCancel(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("cancel", flag.ContinueOnError)
 	fs.SetOutput(a.Err)
 	grace := fs.Duration("grace", 5*time.Second, "time to wait for confirmed termination")
+	accept := fs.Bool("accept-unconfirmed-termination", false,
+		"release a held workspace lease after confirming the process yourself")
 	pos, err := parseCommand(fs, args, map[string]bool{"grace": true})
 	if err != nil {
 		return a.fail("cancel", model.WrapError(model.ErrUsage, "invalid flags", err), nil)
 	}
 	if len(pos) != 1 {
-		return a.fail("cancel", model.NewError(model.ErrUsage, "usage: amgo cancel <job-id>"), nil)
+		return a.fail("cancel", model.NewError(model.ErrUsage,
+			"usage: amgo cancel <job-id> [--grace 5s] [--accept-unconfirmed-termination]"), nil)
 	}
 	if err := a.recoverJobs(ctx); err != nil {
 		return a.fail("cancel", err, nil)
 	}
-	j, err := a.JobSvc.Cancel(ctx, pos[0], *grace)
+	j, err := a.JobSvc.Cancel(ctx, job.CancelInput{
+		JobID: pos[0], Grace: *grace, AcceptUnconfirmed: *accept,
+	})
 	if err != nil {
 		return a.failJob("cancel", err, j)
 	}
@@ -363,6 +368,8 @@ func jobData(j model.Job) map[string]any {
 		"result":            j.ResultText,
 		"result_truncated":  j.ResultTruncated,
 		"result_unverified": j.ResultUnverified,
+		"lease_held":        j.LeaseHeld,
+		"lease_hold_reason": j.LeaseHoldReason,
 		"evidence":          j.TerminalEvidence,
 		"usage":             j.Usage,
 		"log_path":          j.LogPath,
@@ -390,6 +397,9 @@ func (a *App) printJob(j model.Job) {
 	}
 	if j.TerminalEvidence != "" {
 		fmt.Fprintf(a.Out, "evidence: %s\n", render.Safe(j.TerminalEvidence))
+	}
+	if j.LeaseHeld {
+		fmt.Fprintf(a.Out, "lease held: %s\n", render.Safe(j.LeaseHoldReason))
 	}
 	if j.LogPath != "" {
 		fmt.Fprintf(a.Out, "log: %s (%d bytes", render.Safe(j.LogPath), j.LogBytes)

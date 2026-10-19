@@ -72,12 +72,15 @@ A job is an owned provider process, not an authorization grant.
   with explicit truncation metadata. They contain raw provider and tool output;
   treat them as sensitive as the workspace.
 - One lease per checkout serializes amgo jobs. It cannot exclude external
-  writers and is not a filesystem lock.
+  writers and is not a filesystem lock. If termination cannot be confirmed, the
+  lease is held rather than left to expire, and only an operator who explicitly
+  accepts the risk can release it.
 - `continue` requires a terminal job with a native session ID and refuses while
   a registered session with that ID is alive. Codex resume inherits the stopped
   session's sandbox.
-- A lost supervisor leaves `interrupted` or `unknown`, never `completed`.
-  Detached unknown job records are retained by prune.
+- A lost supervisor leaves `interrupted`, or keeps the job unresolved with a
+  held lease when owned execution cannot be proven stopped; it never leaves
+  `completed`. Detached unknown job records are retained by prune.
 
 ## Documented-only adapters
 

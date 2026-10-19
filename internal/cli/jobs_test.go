@@ -10,10 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"amgo/internal/adapter"
+	"amgo/internal/config"
 	"amgo/internal/model"
 	"amgo/internal/runner"
+	"amgo/internal/session"
+	"amgo/internal/store"
 )
 
 func TestCLIJobHelper(t *testing.T) {
@@ -165,6 +169,72 @@ func TestRunStatusResultJobsFollow(t *testing.T) {
 	code, env, stderr = runJobCLI(t, "", "--home", home, "--json", "continue", id, "--text", "ok")
 	if code != 0 || env.Data["resume_of"] != id {
 		t.Fatalf("continue exit=%d stderr=%s data=%+v", code, stderr, env.Data)
+	}
+}
+
+func TestCancelAcceptUnconfirmedFlagOrders(t *testing.T) {
+	for _, args := range [][]string{
+		{"cancel", "--accept-unconfirmed-termination", "j_missing"},
+		{"cancel", "j_missing", "--accept-unconfirmed-termination"},
+		{"cancel", "j_missing", "--accept-unconfirmed-termination", "--grace", "1s"},
+		{"cancel", "--grace", "1s", "j_missing", "--accept-unconfirmed-termination"},
+	} {
+		home := t.TempDir()
+		full := append([]string{"--home", home, "--json"}, args...)
+		code, _, stderr := runJobCLI(t, "", full...)
+		if code != 5 {
+			t.Fatalf("%v exit=%d stderr=%s", args, code, stderr)
+		}
+	}
+}
+
+func TestRecoverReconcilesJobs(t *testing.T) {
+	home := t.TempDir()
+	ws := t.TempDir()
+	st, err := store.Open(config.DBPath(home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	checkout, _ := session.CheckoutIDs(ws)
+	job := model.Job{
+		ID: "j_lost", Adapter: "fake", Workspace: ws, CheckoutID: checkout,
+		Prompt: "x", PromptSHA256: "h", Policy: "default", State: model.JobRunning,
+		CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
+		Deadline: now.Add(time.Hour), OwnerPID: 999999, OwnerProcStart: "gone",
+		ProviderStartRecorded: true,
+	}
+	if _, err := st.CreateJob(job, now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcquireLease(model.Lease{
+		CheckoutID: checkout, JobID: job.ID, ExpiresAt: now.Add(time.Hour),
+	}, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	code, env, stderr := runJobCLI(t, "", "--home", home, "--json", "recover")
+	if code != 0 {
+		t.Fatalf("recover exit=%d stderr=%s", code, stderr)
+	}
+	if got, _ := env.Data["jobs_recovered"].(float64); got != 1 {
+		t.Fatalf("jobs_recovered=%v data=%+v", env.Data["jobs_recovered"], env.Data)
+	}
+	st, err = store.Open(config.DBPath(home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	got, err := st.GetJob(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != model.JobInterrupted {
+		t.Fatalf("state=%s", got.State)
+	}
+	if _, found, err := st.GetLease(checkout); err != nil || found {
+		t.Fatalf("lease found=%v err=%v", found, err)
 	}
 }
 

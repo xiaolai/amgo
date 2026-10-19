@@ -381,6 +381,43 @@ func TestPruneRetainsIdempotencyMembership(t *testing.T) {
 	}
 }
 
+func TestPruneDryRunReportsIdempotencyDeletion(t *testing.T) {
+	st := testStore(t)
+	now := time.Now().UTC()
+	baseConversation(t, st, "c1", 4, now)
+	prepare(t, st, "c1", "m1", "k1", "fp1", now)
+	if err := st.MarkDispatched("a_m1", 20*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinalizeAttempt(FinalizeRequest{AttemptID: "a_m1", Outcome: "submitted", Now: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AckMessage("m1", model.ProvenanceRecipient, "r", "", now); err != nil {
+		t.Fatal(err)
+	}
+	pruneNow, olderThan := now.Add(31*24*time.Hour), now.Add(time.Second)
+	dry, err := st.Prune(pruneNow, olderThan, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dry.Messages != 1 || dry.IdempotencyDeleted != 1 {
+		t.Fatalf("dry=%+v", dry)
+	}
+	if _, found, err := st.LookupIdempotency("operator:1", "k1"); err != nil || !found {
+		t.Fatalf("dry run deleted idempotency membership: found=%v err=%v", found, err)
+	}
+	exec, err := st.Prune(pruneNow, olderThan, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exec.IdempotencyDeleted != dry.IdempotencyDeleted {
+		t.Fatalf("dry=%+v exec=%+v", dry, exec)
+	}
+	if _, found, err := st.LookupIdempotency("operator:1", "k1"); err != nil || found {
+		t.Fatalf("execution kept idempotency membership: found=%v err=%v", found, err)
+	}
+}
+
 func TestSessionAliasUniquenessAndLeave(t *testing.T) {
 	st := testStore(t)
 	now := time.Now().UTC()

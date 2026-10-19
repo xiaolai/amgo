@@ -13,6 +13,8 @@ tmp="$(mktemp -d "${TMPDIR:-/tmp}/amgo-license.XXXXXX")"
 trap 'rm -rf -- "$tmp"' EXIT
 used="$tmp/used"
 listed="$tmp/listed"
+manifest="$tmp/manifest"
+: >"$manifest"
 
 go list -deps -test -tags native -f '{{if .Module}}{{if not .Module.Main}}{{.Module.Path}} {{.Module.Version}}{{end}}{{end}}' ./... |
 	grep -v '^$' | sort -u >"$used"
@@ -54,7 +56,14 @@ while read -r mod ver; do
 		echo "license-check: no license file in ${dir}" >&2
 		fail=1
 	fi
+	printf '%s\t%s\t%s\n' "$mod" "$ver" "$dir" >>"$manifest"
 done <"$used"
+
+# A table row is not a license. Require the bundled section to contain the
+# full text of the module's license file, modulo whitespace.
+if ! go run ./scripts/notice-text-check -notices "$notices" <"$manifest"; then
+	fail=1
+fi
 
 while read -r mod ver; do
 	[ -n "$mod" ] || continue

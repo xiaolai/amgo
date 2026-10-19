@@ -9,8 +9,9 @@ module path and version identify the exact source revision.
 
 `make license-check` fails when code or tests use a module that is missing
 from this table, when the module cache holds no license file for a used
-module, or when a table entry is no longer used. Release archives include this
-file next to the binary.
+module, when a bundled license section does not contain that module's full
+license text, or when a table entry is no longer used. Release archives include
+this file next to the binary.
 
 ## Dependencies
 

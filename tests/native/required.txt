@@ -1,0 +1,18 @@
+# Every test here must report PASS for a release. Adding or removing a native
+# test requires updating this manifest; release-check compares it with -list.
+TestClaudeAcceptNonceAndRecipientAck
+TestClaudeHoldDoesNotDeliver
+TestClaudeRefuseDoesNotDeliver
+TestClaudeDeadTargetReplayAndNewSend
+TestClaudeTargetSnapshotMismatch
+TestCodexQueueDeliveryAndIdempotentReplay
+TestCodexBusyQueue
+TestCodexDeadTarget
+TestClaudeInterruptDuringWriteIsUnknown
+TestStoreDiskFullReportsOutcomeUnpersisted
+TestClaudeBudgetReplayCloseExpiry
+TestClaudeBusyQueue
+TestCodexJobContinuationAndCancel
+TestClaudeJobContinuation
+TestOpenCodeJobContinuation
+TestOpenCodeExistingSessionSend

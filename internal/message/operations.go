@@ -102,6 +102,7 @@ func sameRetryTarget(a, b model.Target) bool {
 	return a.Adapter == b.Adapter &&
 		a.HostID == b.HostID &&
 		a.ConfigHome == b.ConfigHome &&
+		a.Endpoint == b.Endpoint &&
 		a.NativeSessionID == b.NativeSessionID
 }
 
@@ -241,9 +242,18 @@ func (s *Service) Read(messageID string) (Record, error) {
 	if err != nil {
 		return Record{}, err
 	}
-	attempts, _ := st.ListAttempts(messageID)
-	receipts, _ := st.ListReceipts(messageID)
-	events, _ := st.ListEvents(messageID, 1000)
+	attempts, err := st.ListAttempts(messageID)
+	if err != nil {
+		return Record{}, err
+	}
+	receipts, err := st.ListReceipts(messageID)
+	if err != nil {
+		return Record{}, err
+	}
+	events, err := st.ListEvents(messageID, 0)
+	if err != nil {
+		return Record{}, err
+	}
 	rec := Record{Message: msg, Attempts: attempts, Receipts: receipts, Events: events}
 	if r, err := st.GetReservationForMessage(messageID); err == nil {
 		rec.Reservation = &r
@@ -333,7 +343,7 @@ func (s *Service) ShowConversation(name string) (model.Conversation, []model.Mes
 	if err != nil {
 		return model.Conversation{}, nil, err
 	}
-	msgs, err := st.ListConversationMessages(c.ID, 1000)
+	msgs, err := st.ListConversationMessages(c.ID, 0)
 	return c, msgs, err
 }
 
@@ -493,18 +503,15 @@ func (s *Service) ExportJSONL(w io.Writer, conversationName string) error {
 	if conversationName != "" {
 		c, err := st.GetConversationByName(conversationName)
 		if err != nil {
-			_ = st.Close()
 			return err
 		}
-		msgs, err = st.ListConversationMessages(c.ID, 1000)
+		msgs, err = st.ListConversationMessages(c.ID, 0)
 		if err != nil {
-			_ = st.Close()
 			return err
 		}
 	} else {
-		msgs, err = st.ListAllMessages(1000)
+		msgs, err = st.ListAllMessages(0)
 		if err != nil {
-			_ = st.Close()
 			return err
 		}
 	}
@@ -512,28 +519,41 @@ func (s *Service) ExportJSONL(w io.Writer, conversationName string) error {
 		Type  string `json:"type"`
 		Value any    `json:"value"`
 	}
-	var records []record
-	for _, m := range msgs {
-		records = append(records, record{Type: "message", Value: m})
-		attempts, _ := st.ListAttempts(m.ID)
-		for _, a := range attempts {
-			records = append(records, record{Type: "attempt", Value: a})
-		}
-		receipts, _ := st.ListReceipts(m.ID)
-		for _, r := range receipts {
-			records = append(records, record{Type: "receipt", Value: r})
-		}
-		events, _ := st.ListEvents(m.ID, 1000)
-		for _, ev := range events {
-			records = append(records, record{Type: "event", Value: ev})
-		}
-	}
-	_ = st.Close()
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
-	for _, rec := range records {
-		if err := enc.Encode(rec); err != nil {
+	write := func(typ string, v any) error {
+		return enc.Encode(record{Type: typ, Value: v})
+	}
+	for _, m := range msgs {
+		if err := write("message", m); err != nil {
 			return err
+		}
+		attempts, err := st.ListAttempts(m.ID)
+		if err != nil {
+			return err
+		}
+		for _, a := range attempts {
+			if err := write("attempt", a); err != nil {
+				return err
+			}
+		}
+		receipts, err := st.ListReceipts(m.ID)
+		if err != nil {
+			return err
+		}
+		for _, r := range receipts {
+			if err := write("receipt", r); err != nil {
+				return err
+			}
+		}
+		events, err := st.ListEvents(m.ID, 0)
+		if err != nil {
+			return err
+		}
+		for _, ev := range events {
+			if err := write("event", ev); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

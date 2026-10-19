@@ -53,6 +53,17 @@ type Target struct {
 	Kind            string   `json:"kind,omitempty"`
 }
 
+// SameTargetIdentity reports whether two snapshots address the same native
+// target. The endpoint is part of identity: two servers can expose the same
+// session ID, and an HTTP endpoint can exist without a config home.
+func SameTargetIdentity(a, b Target) bool {
+	return a.Adapter == b.Adapter &&
+		a.HostID == b.HostID &&
+		a.ConfigHome == b.ConfigHome &&
+		a.Endpoint == b.Endpoint &&
+		a.NativeSessionID == b.NativeSessionID
+}
+
 // Candidate is a native session that has not necessarily been registered.
 type Candidate struct {
 	Target

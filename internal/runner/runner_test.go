@@ -2,11 +2,15 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +48,18 @@ func TestHelperProcess(t *testing.T) {
 		for i := 0; i < 50; i++ {
 			fmt.Printf("{\"event\":\"text\",\"text\":%q}\n", line)
 		}
+	case "stray":
+		child := exec.Command("sleep", "60")
+		child.Stdout = nil
+		child.Stderr = nil
+		if err := child.Start(); err != nil {
+			os.Exit(3)
+		}
+		if p := os.Getenv("AMGO_HELPER_PIDFILE"); p != "" {
+			_ = os.WriteFile(p, []byte(fmt.Sprint(child.Process.Pid)), 0o600)
+		}
+		fmt.Println(`{"event":"start","session":"s4"}`)
+		fmt.Println(`{"event":"done","status":"success"}`)
 	case "noresult":
 		os.Exit(0)
 	}
@@ -233,6 +249,43 @@ func TestExecuteBoundsLog(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "log truncated at the per-job limit") {
 		t.Fatalf("truncation marker missing: %q", raw)
+	}
+	sum := sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); got != out.LogSHA256 {
+		t.Fatalf("log hash=%s, file hash=%s", out.LogSHA256, got)
+	}
+	if int64(len(raw)) != out.LogBytes {
+		t.Fatalf("log bytes=%d, file bytes=%d", out.LogBytes, len(raw))
+	}
+}
+
+func TestExecuteTerminatesStrayGroupMembers(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	spec := helperSpec(t, "stray")
+	spec.Env = append(spec.Env, "AMGO_HELPER_PIDFILE="+pidFile)
+	out, err := Execute(context.Background(), spec, &testParser{}, Options{
+		LogPath: t.TempDir() + "/agent.log",
+	}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.StrayGroup {
+		t.Fatalf("stray group member was not recorded: %+v", out)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for platform.PIDAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if platform.PIDAlive(pid) {
+		t.Fatalf("same-group writer %d survived Execute", pid)
 	}
 }
 

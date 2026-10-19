@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -35,6 +36,69 @@ func TestCheckoutIDsDistinguishWorktrees(t *testing.T) {
 	}
 	if repoRepo == "" || wtRepo == "" || repoRepo != wtRepo {
 		t.Fatalf("repo IDs: %q vs %q", repoRepo, wtRepo)
+	}
+
+	sub := filepath.Join(repo, "internal", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subCheckout, subRepo := CheckoutIDs(sub)
+	if subCheckout != repoCheckout {
+		t.Fatalf("subdirectory checkout ID differs: %s vs %s", subCheckout, repoCheckout)
+	}
+	if subRepo != repoRepo {
+		t.Fatalf("subdirectory repo ID differs: %s vs %s", subRepo, repoRepo)
+	}
+}
+
+func TestRejoinSameAliasRetargetsEndpoint(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	target := model.Target{Adapter: model.AdapterOpenCode, NativeSessionID: "ses_1", Endpoint: "http://127.0.0.1:4000"}
+	first, err := Join(st, JoinRequest{
+		Alias: "worker", Candidate: model.Candidate{Target: target, Live: true},
+		Capabilities: model.Capabilities{LiveMessaging: true}, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetAcceptUnknownDelivery(first.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	next := target
+	next.Endpoint = "http://127.0.0.1:4001"
+	second, err := Join(st, JoinRequest{
+		Alias: "worker", Candidate: model.Candidate{Target: next, Live: true},
+		Capabilities: model.Capabilities{LiveMessaging: true}, Now: now,
+	})
+	if err != nil {
+		t.Fatalf("retarget failed: %v", err)
+	}
+	if second.ID != first.ID || second.Target.Endpoint != next.Endpoint {
+		t.Fatalf("retargeted session=%+v first=%s", second, first.ID)
+	}
+	if second.AcceptUnknownDelivery {
+		t.Fatal("endpoint change kept the delivery-risk acceptance")
+	}
+	all, err := st.ListSessions(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("sessions=%+v", all)
+	}
+	// An unrelated target under the same alias stays a loud conflict rather
+	// than silently rebinding the alias.
+	other := model.Target{Adapter: model.AdapterClaude, NativeSessionID: "other"}
+	if _, err := Join(st, JoinRequest{
+		Alias: "worker", Candidate: model.Candidate{Target: other, Live: true},
+		Capabilities: model.Capabilities{LiveMessaging: true}, Now: now,
+	}); model.Code(err) != model.ErrAmbiguousTarget {
+		t.Fatalf("unrelated retarget err=%v", err)
 	}
 }
 

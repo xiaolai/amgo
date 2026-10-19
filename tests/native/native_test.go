@@ -14,6 +14,8 @@ package native_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -59,20 +61,43 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	repoRoot = filepath.Dir(filepath.Dir(filepath.Dir(file)))
-	dir, err := os.MkdirTemp("", "amgo-native-bin-")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	dir := ""
+	if supplied := os.Getenv("AMGO_NATIVE_BIN"); supplied != "" {
+		// Release qualification must exercise the signed artifact, not a
+		// rebuilt binary with different linking and version metadata.
+		abs, err := filepath.Abs(supplied)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "resolve AMGO_NATIVE_BIN: %v\n", err)
+			os.Exit(1)
+		}
+		fi, err := os.Stat(abs)
+		if err != nil || fi.IsDir() || fi.Mode()&0o111 == 0 {
+			fmt.Fprintf(os.Stderr, "AMGO_NATIVE_BIN is not an executable file: %s\n", abs)
+			os.Exit(1)
+		}
+		amgoBin = abs
+	} else {
+		var err error
+		dir, err = os.MkdirTemp("", "amgo-native-bin-")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		amgoBin = filepath.Join(dir, "amgo")
+		build := exec.Command("go", "build", "-trimpath", "-o", amgoBin, "./cmd/amgo")
+		build.Dir = repoRoot
+		if out, err := build.CombinedOutput(); err != nil {
+			fmt.Fprintf(os.Stderr, "build amgo: %v\n%s", err, out)
+			os.Exit(1)
+		}
 	}
-	amgoBin = filepath.Join(dir, "amgo")
-	build := exec.Command("go", "build", "-trimpath", "-o", amgoBin, "./cmd/amgo")
-	build.Dir = repoRoot
-	if out, err := build.CombinedOutput(); err != nil {
-		fmt.Fprintf(os.Stderr, "build amgo: %v\n%s", err, out)
-		os.Exit(1)
+	if sum, err := fileSHA256(amgoBin); err == nil {
+		fmt.Fprintf(os.Stderr, "native gates use %s sha256=%s\n", amgoBin, sum)
 	}
 	code := m.Run()
-	_ = os.RemoveAll(dir)
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 	if out, err := exec.Command("pgrep", "-f", amgoBin).Output(); err == nil && len(bytes.TrimSpace(out)) > 0 {
 		fmt.Fprintf(os.Stderr, "amgo process left running: %s\n", out)
 		if code == 0 {
@@ -80,6 +105,15 @@ func TestMain(m *testing.M) {
 		}
 	}
 	os.Exit(code)
+}
+
+func fileSHA256(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // ---- CLI helpers ----

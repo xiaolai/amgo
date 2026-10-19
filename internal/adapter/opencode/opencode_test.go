@@ -2,12 +2,15 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"amgo/internal/adapter"
 	"amgo/internal/model"
+	"amgo/internal/runner"
 )
 
 func feed(t *testing.T, p *JobParser, lines ...string) {
@@ -67,6 +70,39 @@ func TestJobParserErrorAndPermission(t *testing.T) {
 	feed(t, p, `{"type":"permission","sessionID":"s"}`)
 	if res := p.Result(); res.Outcome != model.RunNeedsAction {
 		t.Fatalf("result=%+v", res)
+	}
+}
+
+func TestJobParserBoundsEvidence(t *testing.T) {
+	p := NewJobParser()
+	feedText := func(text string) {
+		t.Helper()
+		line, err := json.Marshal(map[string]any{
+			"type": "text", "sessionID": "ses_1",
+			"part": map[string]any{"type": "text", "text": text},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.Line(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The cut falls inside the two-byte "é": the retained evidence must remain
+	// valid UTF-8 and must report the original size.
+	feedText(strings.Repeat("a", runner.MaxEvidenceBytes-1) + "é" + strings.Repeat("b", 1024))
+	res := p.Result()
+	if len(res.Evidence) > runner.MaxEvidenceBytes {
+		t.Fatalf("evidence retained %d bytes", len(res.Evidence))
+	}
+	if !res.EvidenceTruncated {
+		t.Fatal("truncation was not reported")
+	}
+	if res.EvidenceBytes != runner.MaxEvidenceBytes+1+1024 {
+		t.Fatalf("evidence bytes=%d", res.EvidenceBytes)
+	}
+	if !utf8.ValidString(res.Evidence) {
+		t.Fatal("evidence split a UTF-8 rune")
 	}
 }
 

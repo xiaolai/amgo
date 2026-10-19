@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"time"
 
 	"amgo/internal/adapter"
 	"amgo/internal/ids"
 	"amgo/internal/model"
 	"amgo/internal/process"
+	"amgo/internal/store"
 )
 
 // Status is one job with its bounded event history and artifacts.
@@ -29,7 +31,7 @@ func (s *Service) Status(id string) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	events, err := st.ListJobEvents(id, 0, 1000)
+	events, err := st.ListJobEvents(id, 0, 0)
 	if err != nil {
 		return Status{}, err
 	}
@@ -76,6 +78,24 @@ func (s *Service) Follow(ctx context.Context, id string, after uint64, timeout t
 			after = events[len(events)-1].Seq
 		}
 		if job.State.Terminal() {
+			// Do not lose a tail page when the event count is a multiple of the
+			// page size. A terminal job cannot grow new events, so drain until a
+			// short page.
+			for len(events) == 1000 {
+				st, err := s.open()
+				if err != nil {
+					return job, all, err
+				}
+				events, err = st.ListJobEvents(id, after, 1000)
+				_ = st.Close()
+				if err != nil {
+					return job, all, err
+				}
+				all = append(all, events...)
+				if len(events) > 0 {
+					after = events[len(events)-1].Seq
+				}
+			}
 			return job, all, nil
 		}
 		if time.Now().After(deadline) {
@@ -107,9 +127,39 @@ func (s *Service) Result(id string) (model.Job, []model.Artifact, error) {
 	return job, artifacts, err
 }
 
+// terminateGroup is a test seam; production always signals through the
+// process package.
+var terminateGroup = process.TerminateGroup
+
+// liveRegisteredSession reports whether a registered target makes continuation
+// unsafe. A PID-zero registration (Codex loaded thread, OpenCode server) cannot
+// prove the session inactive; only a positive PID that is provably dead allows
+// continuation past a registration.
+func liveRegisteredSession(adapterName, nativeID string, sessions []model.Session) bool {
+	for _, sess := range sessions {
+		if sess.Target.Adapter != adapterName || sess.Target.NativeSessionID != nativeID {
+			continue
+		}
+		if sess.Target.PID <= 0 || process.Alive(sess.Target.PID, sess.Target.ProcStart) {
+			return true
+		}
+	}
+	return false
+}
+
+// CancelInput is one explicit operator cancellation request.
+type CancelInput struct {
+	JobID string
+	Grace time.Duration
+	// AcceptUnconfirmed releases a workspace whose owned execution could not be
+	// confirmed stopped. Without it, the lease stays held.
+	AcceptUnconfirmed bool
+}
+
 // Cancel requests cancellation and waits for the supervisor to record a
 // terminal state. It signals only the verifiably owned child process group.
-func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (model.Job, error) {
+func (s *Service) Cancel(ctx context.Context, in CancelInput) (model.Job, error) {
+	grace := in.Grace
 	if grace <= 0 {
 		grace = 5 * time.Second
 	}
@@ -118,16 +168,16 @@ func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (m
 	if err != nil {
 		return model.Job{}, err
 	}
-	job, err := st.GetJob(id)
+	job, err := st.GetJob(in.JobID)
 	if err != nil {
 		_ = st.Close()
 		return model.Job{}, err
 	}
 	if job.State.Terminal() {
 		_ = st.Close()
-		return job, nil
+		return s.terminalCancel(job, in)
 	}
-	job, err = st.UpdateJob(id, now, func(j *model.Job) error {
+	job, err = st.UpdateJob(in.JobID, now, func(j *model.Job) error {
 		if j.State.Terminal() {
 			return nil
 		}
@@ -135,7 +185,7 @@ func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (m
 			t := now
 			j.CancelRequestedAt = &t
 		}
-		if j.OwnerPID == 0 && j.ChildPID == 0 && j.State == model.JobCreated {
+		if j.OwnerPID == 0 && j.ChildPID == 0 && j.State == model.JobCreated && !j.ProviderStartAttempted {
 			j.State = model.JobCancelled
 			j.TerminalEvidence = "cancelled before the supervisor started"
 			finished := now
@@ -148,17 +198,30 @@ func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (m
 		return job, err
 	}
 	if job.State == model.JobCancelled {
-		s.releaseLease(job, now)
+		if err := s.releaseLease(job, now); err != nil {
+			return job, err
+		}
 		return job, nil
+	}
+	if job.State.Terminal() {
+		return s.terminalCancel(job, in)
 	}
 	// A live supervisor owns the child and watches CancelRequestedAt; let it
 	// terminate the group so the provider result is classified as cancelled.
 	// Only a lost supervisor leaves the child for this process to signal.
 	if job.OwnerPID == 0 || !process.Alive(job.OwnerPID, job.OwnerProcStart) {
-		if job.ChildPID > 0 && process.Alive(job.ChildPID, job.ChildProcStart) {
-			if err := process.TerminateGroup(job.ChildPID, grace); err != nil {
-				return job, model.WrapError(model.ErrProcessLost, "cancellation could not confirm child termination", err)
+		switch process.Check(job.ChildPID, job.ChildProcStart) {
+		case process.Live:
+			if err := terminateGroup(job.ChildPID, grace); err != nil {
+				return s.unresolvedCancel(job, in,
+					"cancellation could not confirm child termination: "+err.Error())
 			}
+			if process.GroupAlive(job.ChildPID) {
+				return s.unresolvedCancel(job, in, "cancellation could not confirm child termination")
+			}
+		case process.Unknown:
+			return s.unresolvedCancel(job, in,
+				"child process identity cannot be verified; refusing to signal by PID alone")
 		}
 	}
 	deadline := time.Now().Add(grace + 5*time.Second)
@@ -167,18 +230,23 @@ func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (m
 		if err != nil {
 			return job, err
 		}
-		latest, jerr := st.GetJob(id)
+		latest, jerr := st.GetJob(in.JobID)
 		_ = st.Close()
 		if jerr != nil {
 			return job, jerr
 		}
 		job = latest
 		if job.State.Terminal() {
-			return job, nil
+			return s.terminalCancel(job, in)
 		}
-		if job.OwnerPID > 0 && !process.Alive(job.OwnerPID, job.OwnerProcStart) {
-			if err := s.recoverJob(job); err != nil {
-				return job, err
+		if job.OwnerPID == 0 || !process.Alive(job.OwnerPID, job.OwnerProcStart) {
+			reconciled, rerr := s.recoverJob(job)
+			if rerr != nil {
+				return job, rerr
+			}
+			if !reconciled {
+				return s.unresolvedCancel(job, in,
+					"supervisor is gone and owned execution could not be confirmed stopped")
 			}
 			continue
 		}
@@ -189,6 +257,80 @@ func (s *Service) Cancel(ctx context.Context, id string, grace time.Duration) (m
 		}
 	}
 	return job, model.NewError(model.ErrDeadlineExceeded, "cancellation was requested but the job has not finished")
+}
+
+// terminalCancel handles a job that already reached a terminal state. A held
+// lease requires an explicit operator risk acceptance.
+func (s *Service) terminalCancel(job model.Job, in CancelInput) (model.Job, error) {
+	if !job.LeaseHeld {
+		return job, nil
+	}
+	if !in.AcceptUnconfirmed {
+		return job, model.NewError(model.ErrPolicyRefused,
+			"workspace lease is held because owned execution could not be confirmed stopped; "+
+				"inspect the process, then pass --accept-unconfirmed-termination")
+	}
+	return s.acceptUnconfirmed(job)
+}
+
+func (s *Service) unresolvedCancel(job model.Job, in CancelInput, reason string) (model.Job, error) {
+	if in.AcceptUnconfirmed {
+		return s.acceptUnconfirmed(job)
+	}
+	held, err := s.holdUnresolved(job, reason)
+	if err != nil {
+		return held, err
+	}
+	return held, model.NewError(model.ErrProcessLost, reason+"; the workspace lease is held")
+}
+
+// acceptUnconfirmed records the operator's explicit acceptance, makes the job
+// terminal when it was not, and releases the held lease.
+func (s *Service) acceptUnconfirmed(job model.Job) (model.Job, error) {
+	now := s.now()
+	st, err := s.open()
+	if err != nil {
+		return job, err
+	}
+	defer st.Close()
+	job, err = st.UpdateJob(job.ID, now, func(j *model.Job) error {
+		if !j.State.Terminal() {
+			j.State = model.JobUnknown
+			finished := now
+			j.FinishedAt = &finished
+		}
+		j.LeaseHeld = false
+		j.LeaseHoldReason = ""
+		j.ResultUnverified = true
+		j.ErrorCode = model.ErrProcessLost
+		j.ErrorDetail = "operator accepted unconfirmed termination"
+		j.TerminalEvidence = "operator released the workspace lease without confirmed process exit"
+		return nil
+	})
+	if err != nil {
+		return job, err
+	}
+	return st.ReleaseJobLease(job.ID, job.CheckoutID, now)
+}
+
+// holdUnresolved retains the workspace lease and records why. It never changes
+// a terminal job back into a running one.
+func (s *Service) holdUnresolved(job model.Job, reason string) (model.Job, error) {
+	st, err := s.open()
+	if err != nil {
+		return job, err
+	}
+	defer st.Close()
+	out, held, err := st.HoldJobLease(job.ID, job.CheckoutID, reason, model.ErrProcessLost, nil, s.now())
+	if err != nil {
+		return out, err
+	}
+	if !held {
+		// The job finished between the snapshot and the hold; a terminal job
+		// owns no unresolved lease.
+		return st.GetJob(job.ID)
+	}
+	return out, nil
 }
 
 // ContinueInput starts a new job in a stopped job's native session.
@@ -227,15 +369,10 @@ func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, er
 		_ = st.Close()
 		return model.Job{}, err
 	}
-	for _, sess := range sessions {
-		if sess.Target.NativeSessionID != orig.NativeSessionID {
-			continue
-		}
-		if sess.Target.PID > 0 && process.Alive(sess.Target.PID, sess.Target.ProcStart) {
-			_ = st.Close()
-			return model.Job{}, model.NewError(model.ErrPolicyRefused,
-				"native session is registered as live; use send instead of continue")
-		}
+	if liveRegisteredSession(orig.Adapter, orig.NativeSessionID, sessions) {
+		_ = st.Close()
+		return model.Job{}, model.NewError(model.ErrPolicyRefused,
+			"native session is registered as live; use send or leave the registration before continuing")
 	}
 	active, err := st.ListActiveJobs()
 	if err != nil {
@@ -304,8 +441,9 @@ func (s *Service) Continue(ctx context.Context, in ContinueInput) (model.Job, er
 }
 
 // Recover reconciles jobs whose supervisor is gone. It never guesses success:
-// a lost supervisor yields interrupted or unknown. A verification callback
-// checks process identity before any signal is sent.
+// a lost supervisor yields interrupted, or a held lease when owned execution
+// cannot be proven stopped. A verification callback checks process identity
+// before any signal is sent.
 func (s *Service) Recover(ctx context.Context) (int, error) {
 	st, err := s.open()
 	if err != nil {
@@ -319,49 +457,85 @@ func (s *Service) Recover(ctx context.Context) (int, error) {
 	n := 0
 	for _, j := range jobs {
 		if j.State == model.JobCreated && j.OwnerPID == 0 {
-			if s.now().Sub(j.UpdatedAt) > supervisorGrace {
-				if err := s.recoverJob(j); err != nil {
-					return n, err
-				}
-				n++
+			if s.now().Sub(j.UpdatedAt) <= supervisorGrace {
+				continue
 			}
-			continue
+		} else {
+			switch process.Check(j.OwnerPID, j.OwnerProcStart) {
+			case process.Live, process.Unknown:
+				// A live owner is still working. An unverifiable owner is not
+				// proof of death, so it owns the job until a later lookup works.
+				continue
+			case process.Dead:
+			}
 		}
-		if j.OwnerPID == 0 || process.Alive(j.OwnerPID, j.OwnerProcStart) {
-			continue
-		}
-		if err := s.recoverJob(j); err != nil {
+		reconciled, err := s.recoverJob(j)
+		if err != nil {
 			return n, err
 		}
-		n++
+		if reconciled {
+			n++
+		}
 	}
 	return n, nil
 }
 
-func (s *Service) recoverJob(j model.Job) error {
+var errRecoverySnapshotStale = errors.New("recovery snapshot changed")
+
+func (s *Service) recoverJob(j model.Job) (bool, error) {
 	now := s.now()
-	detail := "supervisor exited without terminal evidence"
-	if j.ChildPID > 0 && process.Alive(j.ChildPID, j.ChildProcStart) {
-		if err := process.TerminateGroup(j.ChildPID, 5*time.Second); err != nil {
-			detail = "supervisor lost; owned child could not be confirmed terminated"
-		} else {
-			detail = "supervisor lost; owned child terminated"
+	expect := store.JobHoldExpect{
+		State: j.State, OwnerPID: j.OwnerPID, OwnerProcStart: j.OwnerProcStart,
+		ChildPID: j.ChildPID, ChildProcStart: j.ChildProcStart,
+		ProviderStartRecorded: j.ProviderStartRecorded,
+		ProviderStartAttempted: j.ProviderStartAttempted, StartedAt: j.StartedAt,
+	}
+	if j.ChildPID == 0 {
+		if j.State == model.JobCreated && j.OwnerPID == 0 {
+			return s.finalizeRecovered(j, expect, "supervisor never claimed the job", now)
+		}
+		switch {
+		case j.ProviderStartAttempted:
+			return s.holdRecovered(j, expect,
+				"supervisor exited after spawning but before persisting the child identity; the provider may still be running", now)
+		case !j.ProviderStartRecorded:
+			return s.holdRecovered(j, expect,
+				"supervisor exited and no verifiable child identity exists; ownership cannot be proven", now)
+		default:
+			return s.finalizeRecovered(j, expect, "supervisor exited before the provider started", now)
 		}
 	}
-	state := model.JobInterrupted
-	if j.State == model.JobRunning && j.ChildPID == 0 {
-		state = model.JobUnknown
+	switch process.Check(j.ChildPID, j.ChildProcStart) {
+	case process.Unknown:
+		return s.holdRecovered(j, expect,
+			"owned child identity cannot be verified; refusing to signal by PID alone", now)
+	case process.Live:
+		if err := terminateGroup(j.ChildPID, 5*time.Second); err != nil {
+			return s.holdRecovered(j, expect,
+				"owned child could not be confirmed terminated: "+err.Error(), now)
+		}
+		if process.GroupAlive(j.ChildPID) {
+			return s.holdRecovered(j, expect,
+				"owned process group is still alive after termination", now)
+		}
+		return s.finalizeRecovered(j, expect, "supervisor lost; owned child terminated", now)
+	case process.Dead:
+		return s.finalizeRecovered(j, expect, "supervisor lost; owned child is gone", now)
 	}
+	return false, nil
+}
+
+func (s *Service) finalizeRecovered(j model.Job, expect store.JobHoldExpect, detail string, now time.Time) (bool, error) {
 	st, err := s.open()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer st.Close()
 	_, err = st.UpdateJob(j.ID, now, func(x *model.Job) error {
-		if x.State.Terminal() {
-			return nil
+		if x.State.Terminal() || !store.JobMatchesExpect(*x, expect) {
+			return errRecoverySnapshotStale
 		}
-		x.State = state
+		x.State = model.JobInterrupted
 		x.TerminalEvidence = detail
 		x.ErrorCode = model.ErrProcessLost
 		x.ErrorDetail = detail
@@ -370,10 +544,32 @@ func (s *Service) recoverJob(j model.Job) error {
 		x.FinishedAt = &finished
 		return nil
 	})
-	if err != nil {
-		return err
+	if errors.Is(err, errRecoverySnapshotStale) {
+		return false, nil
 	}
-	return st.ReleaseLease(j.CheckoutID, j.ID, now)
+	if err != nil {
+		return false, err
+	}
+	if _, err := st.ReleaseJobLease(j.ID, j.CheckoutID, now); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Service) holdRecovered(j model.Job, expect store.JobHoldExpect, reason string, now time.Time) (bool, error) {
+	st, err := s.open()
+	if err != nil {
+		return false, err
+	}
+	defer st.Close()
+	_, held, err := st.HoldJobLease(j.ID, j.CheckoutID, reason, model.ErrProcessLost, &expect, now)
+	if err != nil {
+		return false, err
+	}
+	// A false result means the snapshot was stale or the job is terminal; the
+	// next Recover pass re-reads it.
+	_ = held
+	return false, nil
 }
 
 func newJobID() string { return ids.New("j") }

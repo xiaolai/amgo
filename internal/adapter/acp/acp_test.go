@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"amgo/internal/adapter"
 	"amgo/internal/model"
@@ -138,6 +139,13 @@ func TestFakeACPAgent(t *testing.T) {
 					}},
 					map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"stopReason": "end_turn"}},
 				})
+			case "eof":
+				update(sessionID, "final")
+				result(m.ID, map[string]any{"stopReason": "end_turn"})
+				os.Exit(0)
+			case "huge":
+				update(sessionID, strings.Repeat("a", runner.MaxEvidenceBytes-1)+"é"+strings.Repeat("b", 1024))
+				result(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "hang":
 				promptID = m.ID
 			}
@@ -192,6 +200,31 @@ func TestDriverRejectsPermission(t *testing.T) {
 	}
 	if !strings.Contains(log, "permission-selected:reject") {
 		t.Fatalf("client did not select the reject option: %s", log)
+	}
+}
+
+func TestDriverAcceptsFinalResponseBeforeEOF(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		out, log := runFake(t, "eof", "", runner.Options{})
+		if out.Result.Outcome != model.RunCompleted || out.Result.Evidence != "final" {
+			t.Fatalf("iteration %d: out=%+v log=%s", i, out.Result, log)
+		}
+	}
+}
+
+func TestDriverReportsEvidenceTruncation(t *testing.T) {
+	out, _ := runFake(t, "huge", "", runner.Options{})
+	if !out.Result.EvidenceTruncated {
+		t.Fatalf("truncation was not reported: %+v", out.Result)
+	}
+	if out.Result.EvidenceBytes != runner.MaxEvidenceBytes+1+1024 {
+		t.Fatalf("evidence bytes=%d", out.Result.EvidenceBytes)
+	}
+	if len(out.Result.Evidence) > runner.MaxEvidenceBytes {
+		t.Fatalf("evidence retained %d bytes", len(out.Result.Evidence))
+	}
+	if !utf8.ValidString(out.Result.Evidence) {
+		t.Fatal("evidence split a UTF-8 rune")
 	}
 }
 

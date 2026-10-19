@@ -70,9 +70,21 @@ type Job struct {
 	OwnerProcStart string `json:"owner_proc_start,omitempty"`
 	ChildPID       int    `json:"child_pid,omitempty"`
 	ChildProcStart string `json:"child_proc_start,omitempty"`
-	ExitCode       *int   `json:"exit_code,omitempty"`
-	ErrorCode      string `json:"error_code,omitempty"`
-	ErrorDetail    string `json:"error_detail,omitempty"`
+	// ProviderStartRecorded marks a supervisor that claimed this job under the
+	// current recovery protocol. Without it, a legacy starting/running record
+	// with no child identity cannot be assumed never to have spawned.
+	ProviderStartRecorded bool `json:"provider_start_recorded,omitempty"`
+	// ProviderStartAttempted is persisted immediately before cmd.Start. It
+	// distinguishes a supervisor that died before spawning from one that may
+	// have spawned an untracked provider.
+	ProviderStartAttempted bool   `json:"provider_start_attempted,omitempty"`
+	ExitCode               *int   `json:"exit_code,omitempty"`
+	ErrorCode              string `json:"error_code,omitempty"`
+	ErrorDetail            string `json:"error_detail,omitempty"`
+	// LeaseHeld records that the workspace lease was deliberately retained
+	// because owned execution could not be confirmed stopped.
+	LeaseHeld       bool   `json:"lease_held,omitempty"`
+	LeaseHoldReason string `json:"lease_hold_reason,omitempty"`
 
 	CreatedAt         time.Time  `json:"created_at"`
 	StartedAt         *time.Time `json:"started_at,omitempty"`
@@ -120,6 +132,10 @@ type Lease struct {
 	OwnerProcStart string    `json:"owner_proc_start"`
 	AcquiredAt     time.Time `json:"acquired_at"`
 	ExpiresAt      time.Time `json:"expires_at"`
+	// Held marks an unresolved lease that cannot expire into another writer's
+	// hands. Only the owning job, or an operator accepting the risk, releases it.
+	Held       bool   `json:"held,omitempty"`
+	HoldReason string `json:"hold_reason,omitempty"`
 }
 
 // Artifact is an owned, bounded file under the state root.

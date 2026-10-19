@@ -81,15 +81,11 @@ func (s *Store) Prune(now, olderThan time.Time, dryRun, pruneIdem bool) (PruneRe
 			victims = append(victims, m)
 		}
 		rep.Messages = len(victims)
-		if dryRun {
-			for _, m := range victims {
-				rep.BodyBytes += m.BodyBytes
-			}
-			return nil
-		}
-
 		for _, m := range victims {
 			rep.BodyBytes += m.BodyBytes
+			if dryRun {
+				continue
+			}
 			if err := msgs.Delete([]byte(m.ID)); err != nil {
 				return err
 			}
@@ -167,6 +163,9 @@ func (s *Store) Prune(now, olderThan time.Time, dryRun, pruneIdem bool) (PruneRe
 				}
 			}
 			rep.IdempotencyDeleted = len(keys)
+			if dryRun {
+				return nil
+			}
 			for _, d := range keys {
 				if err := idem.Delete(d.key); err != nil {
 					return err

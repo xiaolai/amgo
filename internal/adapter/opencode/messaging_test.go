@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -141,9 +142,79 @@ func TestSendBasicAuthFromEnvironment(t *testing.T) {
 }
 
 func TestLoopbackOnly(t *testing.T) {
-	for _, endpoint := range []string{"http://example.com:4096", "https://127.0.0.1:4096", "http://127.0.0.1:4096/api"} {
+	for _, endpoint := range []string{
+		"http://example.com:4096", "https://127.0.0.1:4096", "http://127.0.0.1:4096/api",
+		"http://user:super-secret@127.0.0.1:4096",
+		"http://127.0.0.1:4096/?token=super-secret",
+		"http://127.0.0.1:4096/#super-secret",
+	} {
 		if _, err := newAPI(endpoint); err == nil {
 			t.Fatalf("endpoint %q was accepted", endpoint)
 		}
+	}
+}
+
+func TestDiscoveredTargetNeverCarriesEndpointCredentials(t *testing.T) {
+	const secret = "super-secret"
+	_, srv := newFakeServer(t)
+	withCreds := strings.Replace(srv.URL, "http://", "http://user:"+secret+"@", 1)
+	if _, err := New().Discover(context.Background(), adapter.DiscoverRequest{Endpoint: withCreds}); err == nil {
+		t.Fatal("credential-bearing endpoint was accepted")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("error leaked the credential: %v", err)
+	}
+}
+
+func TestRedirectIsRefusedBeforeSecondRequest(t *testing.T) {
+	var secondHits int
+	var secondAuth string
+	var mu sync.Mutex
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		secondHits++
+		secondAuth = r.Header.Get("Authorization")
+		mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer second.Close()
+
+	var firstBody string
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		firstBody = string(raw)
+		http.Redirect(w, r, second.URL+"/session/ses_1/prompt_async", http.StatusTemporaryRedirect)
+	}))
+	defer first.Close()
+
+	t.Setenv("OPENCODE_SERVER_PASSWORD", "secret")
+	api, err := newAPI(first.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.promptAsync(context.Background(), "ses_1", "prompt body", nil); err == nil {
+		t.Fatal("redirect was followed")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if secondHits != 0 {
+		t.Fatalf("redirect destination received %d requests", secondHits)
+	}
+	if secondAuth != "" {
+		t.Fatalf("authorization header reached the redirect destination: %q", secondAuth)
+	}
+	if !strings.Contains(firstBody, "prompt body") {
+		t.Fatalf("first server did not receive the prompt: %q", firstBody)
+	}
+}
+
+func TestTargetIdentityIncludesEndpoint(t *testing.T) {
+	a := model.Target{Adapter: model.AdapterOpenCode, NativeSessionID: "ses_1", Endpoint: "http://127.0.0.1:4000"}
+	b := a
+	b.Endpoint = "http://127.0.0.1:4001"
+	if model.SameTargetIdentity(a, b) {
+		t.Fatal("targets on different endpoints share an identity")
+	}
+	if !model.SameTargetIdentity(a, a) {
+		t.Fatal("identical targets differ")
 	}
 }

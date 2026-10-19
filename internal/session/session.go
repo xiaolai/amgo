@@ -44,14 +44,15 @@ func Join(st *store.Store, req JoinRequest) (model.Session, error) {
 		}
 		return model.Session{}, model.NewError(model.ErrTargetUnavailable, "cannot join: "+reason)
 	}
-	if existing, ok, err := st.FindSessionByTarget(req.Candidate.Target.Adapter, req.Candidate.Target.ConfigHome, req.Candidate.Target.NativeSessionID); err != nil {
+	if existing, ok, err := st.FindSessionByTarget(req.Candidate.Target); err != nil {
 		return model.Session{}, err
 	} else if ok {
 		old := existing.Target
 		next := req.Candidate.Target
 		if old.PID != next.PID || old.ProcStart != next.ProcStart ||
 			old.SocketPath != next.SocketPath || old.PIDDomain != next.PIDDomain ||
-			old.NativeSessionID != next.NativeSessionID || old.ConfigHome != next.ConfigHome {
+			old.NativeSessionID != next.NativeSessionID || old.ConfigHome != next.ConfigHome ||
+			old.Endpoint != next.Endpoint {
 			// Delivery uncertainty does not carry across a new process,
 			// endpoint, or native target snapshot.
 			existing.AcceptUnknownDelivery = false
@@ -64,6 +65,28 @@ func Join(st *store.Store, req JoinRequest) (model.Session, error) {
 			return model.Session{}, err
 		}
 		return existing, nil
+	}
+	// A different endpoint is a different target, but re-joining the same alias
+	// for the same native session is an explicit retarget, not a duplicate
+	// registration. A different adapter or session ID stays a loud alias
+	// conflict.
+	existing, err := st.GetSessionByAlias(req.Alias)
+	if err == nil && existing.UnregisteredAt == nil &&
+		existing.Target.Adapter == req.Candidate.Target.Adapter &&
+		existing.Target.NativeSessionID == req.Candidate.Target.NativeSessionID {
+		if !model.SameTargetIdentity(existing.Target, req.Candidate.Target) {
+			existing.AcceptUnknownDelivery = false
+		}
+		existing.Target = req.Candidate.Target
+		existing.Capabilities = req.Capabilities
+		existing.UnregisteredAt = nil
+		if err := st.PutSession(existing); err != nil {
+			return model.Session{}, err
+		}
+		return existing, nil
+	}
+	if err != nil && model.Code(err) != model.ErrTargetUnavailable {
+		return model.Session{}, err
 	}
 	sess := model.Session{
 		RecordVersion: 1,
@@ -127,29 +150,43 @@ func DiscoverOpenCode(ctx context.Context, endpoint string, timeout time.Duratio
 	return a.Discover(ctx, adapter.DiscoverRequest{Endpoint: endpoint, Timeout: timeout})
 }
 
-// CheckoutIDs distinguishes a worktree checkout from the shared Git repository.
+// CheckoutIDs identifies the checkout that a workspace belongs to. The
+// checkout ID is the Git worktree root, not the supplied directory, so a job
+// started in a repository subdirectory shares the lease of a job started at the
+// root. Separate worktrees keep distinct checkout IDs. Outside Git, the
+// canonical directory is the checkout.
 func CheckoutIDs(cwd string) (checkoutID, repoID string) {
-	canon, err := filepath.EvalSymlinks(cwd)
-	if err != nil {
-		canon = cwd
-	}
-	if abs, err := filepath.Abs(canon); err == nil {
-		canon = abs
-	}
-	checkoutID = hash(canon)
+	canon := canonicalPath(cwd)
+	root := canon
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if out, err := exec.CommandContext(ctx, "git", "-C", canon, "rev-parse", "--git-common-dir").Output(); err == nil {
+	if out, err := exec.CommandContext(ctx, "git", "-C", canon, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if top := strings.TrimSpace(string(out)); top != "" {
+			root = canonicalPath(top)
+		}
+	}
+	checkoutID = hash(root)
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	if out, err := exec.CommandContext(ctx2, "git", "-C", canon, "rev-parse", "--git-common-dir").Output(); err == nil {
 		common := strings.TrimSpace(string(out))
 		if !filepath.IsAbs(common) {
 			common = filepath.Join(canon, common)
 		}
-		if abs, err := filepath.Abs(common); err == nil {
-			common = abs
-		}
-		repoID = hash(common)
+		repoID = hash(canonicalPath(common))
 	}
 	return checkoutID, repoID
+}
+
+func canonicalPath(p string) string {
+	if canon, err := filepath.EvalSymlinks(p); err == nil {
+		p = canon
+	}
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	return p
 }
 
 func hash(s string) string {

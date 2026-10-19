@@ -98,13 +98,49 @@ if ! ./scripts/license-check.sh; then
 fi
 
 native_result="SKIPPED"
+native_bin_note="not run"
+native_json=""
 if [ "${AMGO_SKIP_NATIVE:-}" != "1" ]; then
-	native_log="${dist}/native-gates-$(date -u +%Y%m%dT%H%M%SZ).log"
+	stamp_native="$(date -u +%Y%m%dT%H%M%SZ)"
+	native_json="${dist}/native-gates-${stamp_native}.json"
+	native_log="${dist}/native-gates-${stamp_native}.log"
+	required_manifest="tests/native/required.txt"
+	listed="$(mktemp "${TMPDIR:-/tmp}/amgo-native-listed.XXXXXX")"
+	required_sorted="$(mktemp "${TMPDIR:-/tmp}/amgo-native-required.XXXXXX")"
+	trap 'rm -f -- "$listed" "$required_sorted"' EXIT
 	echo "== native delivery gates"
-	if AMGO_NATIVE=1 go test -tags native -count=1 -timeout 20m ./tests/native -v 2>&1 | tee "$native_log"; then
-		native_result="PASS"
-	else
+	[ -s "$required_manifest" ] || {
+		echo "release-check.sh: ${required_manifest} is missing or empty" >&2
 		native_result="FAIL"
+	}
+	AMGO_NATIVE=1 AMGO_NATIVE_BIN="$native_bin" \
+		go test -tags native -list '^Test' ./tests/native 2>>"$native_log" |
+		grep '^Test' | sort >"$listed" || true
+	grep -E '^Test' "$required_manifest" | sort >"$required_sorted" || true
+	if ! diff -u "$required_sorted" "$listed" >>"$native_log" 2>&1; then
+		echo "release-check.sh: native test set differs from ${required_manifest}; update the manifest deliberately" >&2
+		native_result="FAIL"
+	fi
+	if [ "$native_result" != "FAIL" ]; then
+		# Run the gates against the signed release artifact whose hash is
+		# recorded below, not a separately rebuilt binary.
+		if AMGO_NATIVE=1 AMGO_NATIVE_BIN="$native_bin" \
+			go test -tags native -count=1 -timeout 20m -json ./tests/native 2>>"$native_log" |
+			tee "$native_json" >/dev/null; then
+			if go run ./scripts/native-gate-check -required "$required_manifest" -json "$native_json" \
+				2>>"$native_log"; then
+				native_result="PASS"
+			else
+				native_result="FAIL"
+			fi
+		else
+			native_result="FAIL"
+		fi
+	fi
+	native_bin_note="${native_bin} sha256=${checked_sha}"
+	if [ "$native_result" != "PASS" ]; then
+		echo "release-check.sh: native gates did not produce a full PASS; see ${native_json}" >&2
+		tail -20 "$native_log" >&2 || true
 	fi
 fi
 
@@ -124,6 +160,8 @@ report="${dist}/release-check-${stamp}.md"
 	echo "- Vulnerabilities: ${vuln_result}"
 	echo "- License inventory: ${license_result}"
 	echo "- Native gates: ${native_result}"
+	echo "- Native gates binary: ${native_bin_note}"
+	echo "- Native gates evidence: ${native_json:-none}"
 	echo
 	if [ "$native_result" = "PASS" ] && [ "$vuln_result" = "PASS" ] && [ "$license_result" = "PASS" ]; then
 		echo "Result: PASS"

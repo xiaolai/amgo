@@ -29,6 +29,12 @@ func newAPI(endpoint string) (*api, error) {
 	if err != nil || u.Scheme != "http" || u.Host == "" {
 		return nil, fmt.Errorf("endpoint must be an http URL")
 	}
+	if u.User != nil {
+		return nil, fmt.Errorf("endpoint must not contain credentials; use OPENCODE_SERVER_USERNAME and OPENCODE_SERVER_PASSWORD")
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("endpoint must not contain a query or fragment")
+	}
 	host := u.Hostname()
 	ip := net.ParseIP(host)
 	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
@@ -42,9 +48,17 @@ func newAPI(endpoint string) (*api, error) {
 	if user == "" {
 		user = "opencode"
 	}
+	client := &http.Client{
+		Timeout: apiTimeout,
+		// A loopback server must not be able to forward the prompt, or the
+		// Basic authorization header, to a second destination.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return fmt.Errorf("OpenCode endpoint redirected to %s; redirects are not followed", req.URL.Redacted())
+		},
+	}
 	return &api{
-		base:   strings.TrimRight(endpoint, "/"),
-		client: &http.Client{Timeout: apiTimeout},
+		base:   "http://" + u.Host,
+		client: client,
 		user:   user, pass: pass,
 	}, nil
 }

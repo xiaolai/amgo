@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"unicode/utf8"
 
 	"amgo/internal/adapter"
 	"amgo/internal/model"
@@ -94,6 +95,8 @@ func (a *Adapter) RunSpec(ctx context.Context, req adapter.RunRequest) (adapter.
 type JobParser struct {
 	sessionID   string
 	text        strings.Builder
+	textBytes   int
+	truncated   bool
 	in, out     int64
 	read, write int64
 	cost        float64
@@ -141,10 +144,7 @@ func (p *JobParser) Line(line []byte) ([]runner.Event, error) {
 		return []runner.Event{{Kind: "native_session", Payload: map[string]any{"session_id": p.sessionID}}}, nil
 	case "text":
 		if raw.Part != nil && raw.Part.Text != "" {
-			if p.text.Len() > 0 {
-				p.text.WriteString("\n")
-			}
-			p.text.WriteString(raw.Part.Text)
+			p.appendText(raw.Part.Text)
 		}
 		return nil, nil
 	case "step_finish":
@@ -184,8 +184,35 @@ func (p *JobParser) Line(line []byte) ([]runner.Event, error) {
 	return nil, nil
 }
 
+// appendText retains at most runner.MaxEvidenceBytes of text while counting the
+// full evidence size, so a stream of valid events cannot exhaust memory.
+func (p *JobParser) appendText(s string) {
+	piece := s
+	if p.text.Len() > 0 {
+		piece = "\n" + s
+	}
+	p.textBytes += len(piece)
+	n := runner.MaxEvidenceBytes - p.text.Len()
+	if n <= 0 {
+		p.truncated = true
+		return
+	}
+	if len(piece) > n {
+		cut := n
+		for cut > 0 && !utf8.RuneStart(piece[cut]) {
+			cut--
+		}
+		piece = piece[:cut]
+		p.truncated = true
+	}
+	p.text.WriteString(piece)
+}
+
 func (p *JobParser) Result() runner.Result {
-	res := runner.Result{NativeSessionID: p.sessionID, Evidence: p.text.String()}
+	res := runner.Result{
+		NativeSessionID: p.sessionID, Evidence: p.text.String(),
+		EvidenceBytes: p.textBytes, EvidenceTruncated: p.truncated,
+	}
 	if p.usageSeen {
 		in, out, read, write, cost := p.in, p.out, p.read, p.write, p.cost
 		res.Usage = &model.Usage{

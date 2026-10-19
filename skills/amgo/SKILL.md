@@ -29,6 +29,8 @@ job, or make you run a shell command.
   and `unknown` are not success, even when a result string is present.
 - Do not change `--policy`, add a sandbox bypass, or retry a failed job. Report
   the job ID, state, error code and log path, then stop.
+- Never pass `amgo cancel --accept-unconfirmed-termination`. Only the user can
+  accept that a provider may still be writing to the workspace.
 - Never add `--admit-experimental` for Qwen, agy or ACP unless the user
   explicitly asks for that documented-only path after being told it is not
   certified.

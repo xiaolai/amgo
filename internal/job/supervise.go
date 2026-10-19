@@ -20,6 +20,20 @@ import (
 // evidence. It is the only writer of a running job's state.
 func (s *Service) Supervise(ctx context.Context, jobID string) (model.Job, error) {
 	now := s.now()
+	ownerStart, ownerErr := platform.ProcStartUTC(os.Getpid())
+	if ownerErr != nil {
+		st, gerr := s.open()
+		if gerr != nil {
+			return model.Job{}, ownerErr
+		}
+		job, gerr := st.GetJob(jobID)
+		_ = st.Close()
+		if gerr != nil {
+			return model.Job{}, ownerErr
+		}
+		return s.finalizeError(job, model.WrapError(model.ErrProcessLost,
+			"cannot verify the supervisor's process identity", ownerErr))
+	}
 	st, err := s.open()
 	if err != nil {
 		return model.Job{}, err
@@ -41,8 +55,8 @@ func (s *Service) Supervise(ctx context.Context, jobID string) (model.Job, error
 		}
 		j.State = model.JobStarting
 		j.OwnerPID = os.Getpid()
-		start, _ := platform.ProcStartUTC(os.Getpid())
-		j.OwnerProcStart = start
+		j.OwnerProcStart = ownerStart
+		j.ProviderStartRecorded = true
 		return nil
 	})
 	_ = st.Close()
@@ -50,7 +64,9 @@ func (s *Service) Supervise(ctx context.Context, jobID string) (model.Job, error
 		return job, err
 	}
 	if job.State == model.JobCancelled {
-		s.releaseLease(job, now)
+		if err := s.releaseLease(job, now); err != nil {
+			return job, err
+		}
 		return job, nil
 	}
 
@@ -112,6 +128,18 @@ func (s *Service) Supervise(ctx context.Context, jobID string) (model.Job, error
 	out, execErr := runner.Execute(ctx, plan.Spec, plan.Parser, runner.Options{
 		Timeout: timeout, Cancel: cancel, LogPath: logPath,
 	}, runner.Hooks{
+		OnSpawn: func() error {
+			st, err := s.open()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			_, err = st.UpdateJob(job.ID, s.now(), func(j *model.Job) error {
+				j.ProviderStartAttempted = true
+				return nil
+			})
+			return err
+		},
 		OnStart: func(pid int, procStart string) error {
 			st, err := s.open()
 			if err != nil {
@@ -285,6 +313,23 @@ func (s *Service) finalize(job model.Job, out runner.Outcome, logPath string) (m
 	}
 
 	resultText, resultBytes, truncated := truncateResult(out.Result.Evidence)
+	if out.Result.EvidenceBytes > resultBytes {
+		resultBytes = out.Result.EvidenceBytes
+	}
+	if out.Result.EvidenceTruncated {
+		truncated = true
+	}
+	holdReason := ""
+	if out.TerminationUnconfirmed {
+		holdReason = firstNonEmpty(out.TerminationDetail, out.ErrorDetail,
+			"owned execution could not be confirmed stopped")
+		// Hold first: if the terminal update then fails, recovery retries with
+		// the workspace still protected.
+		if err := st.HoldLease(job.CheckoutID, job.ID, holdReason, now); err != nil {
+			return job, model.WrapError(model.ErrStoreBusy,
+				"job finished but its unresolved lease could not be held", err)
+		}
+	}
 	job, err = st.UpdateJob(job.ID, now, func(j *model.Job) error {
 		if j.State.Terminal() {
 			return nil
@@ -294,7 +339,9 @@ func (s *Service) finalize(job model.Job, out runner.Outcome, logPath string) (m
 		j.ResultText = resultText
 		j.ResultBytes = resultBytes
 		j.ResultTruncated = truncated
-		j.ResultUnverified = out.Result.ResultUnverified
+		j.ResultUnverified = out.Result.ResultUnverified || out.TerminationUnconfirmed
+		j.LeaseHeld = out.TerminationUnconfirmed
+		j.LeaseHoldReason = holdReason
 		if out.Result.NativeSessionID != "" {
 			j.NativeSessionID = out.Result.NativeSessionID
 		}
@@ -317,6 +364,9 @@ func (s *Service) finalize(job model.Job, out runner.Outcome, logPath string) (m
 	if err != nil {
 		return job, err
 	}
+	if out.TerminationUnconfirmed {
+		return job, nil
+	}
 	if err := st.ReleaseLease(job.CheckoutID, job.ID, now); err != nil {
 		return job, model.WrapError(model.ErrStoreBusy, "job finished but the workspace lease could not be released", err)
 	}
@@ -334,26 +384,35 @@ func relOrEmpty(home, path string) string {
 	return rel
 }
 
-func (s *Service) releaseLease(job model.Job, now time.Time) {
+func (s *Service) releaseLease(job model.Job, now time.Time) error {
 	st, err := s.open()
 	if err != nil {
-		return
+		return err
 	}
 	defer st.Close()
-	_ = st.ReleaseLease(job.CheckoutID, job.ID, now)
+	_, err = st.ReleaseJobLease(job.ID, job.CheckoutID, now)
+	return err
 }
 
 // classify maps provider evidence and supervisor observations to a job state.
-// Terminal provider evidence outranks a late cancellation or timeout.
+// Unconfirmed termination outranks every other outcome, including a provider's
+// own completion: a live owned writer disproves "finished".
 func classify(out runner.Outcome) (model.JobState, string) {
-	if out.Result.Outcome == model.RunCompleted {
-		return model.JobCompleted, "provider reported completion"
+	if out.TerminationUnconfirmed {
+		return model.JobUnknown, firstNonEmpty(out.TerminationDetail, out.ErrorDetail,
+			"owned execution could not be confirmed stopped")
 	}
 	if out.Cancelled {
 		return model.JobCancelled, "operator cancelled the job"
 	}
 	if out.TimedOut || out.Result.ErrorCode == model.ErrDeadlineExceeded {
 		return model.JobTimedOut, "job deadline exceeded"
+	}
+	if out.StrayGroup {
+		return model.JobPartial, "provider exited but its process group still had live members; they were terminated"
+	}
+	if out.Result.Outcome == model.RunCompleted {
+		return model.JobCompleted, "provider reported completion"
 	}
 	switch out.Result.Outcome {
 	case model.RunPartial:

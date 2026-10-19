@@ -2,6 +2,7 @@ package qwen
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -281,5 +282,42 @@ func TestSocketPermissionsAreEnforced(t *testing.T) {
 	}
 	if len(cands) != 1 || cands[0].Live {
 		t.Fatalf("world-writable socket was live: %+v", cands)
+	}
+}
+
+func TestWriteBoundedByContext(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "amgo-qw-write-")
+	if err != nil {
+		t.Skipf("cannot create a short socket path: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err == nil {
+			accepted <- c
+		}
+	}()
+	conn, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	peer := <-accepted
+	defer peer.Close()
+
+	payload := bytes.Repeat([]byte("x"), 16<<20)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _ = writeBounded(ctx, conn, payload, 5*time.Second)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("bounded write returned after %s", elapsed)
 	}
 }

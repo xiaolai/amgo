@@ -66,6 +66,7 @@ func TestSkillKeepsPermissionBoundary(t *testing.T) {
 		"Do not change `--policy`",
 		"Never add `--admit-experimental` for Qwen, agy or ACP",
 		"Never choose or change an `--acp-command`",
+		"Never pass `amgo cancel --accept-unconfirmed-termination`",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("skill no longer states: %q", want)
@@ -91,6 +92,7 @@ func TestAgentsFallbackKeepsPermissionBoundary(t *testing.T) {
 		"Only `completed` is success",
 		"Never add `--admit-experimental` for Qwen, agy or ACP",
 		"Never choose an `--acp-command`",
+		"Never pass `amgo cancel --accept-unconfirmed-termination`",
 	} {
 		if !strings.Contains(docs, want) {
 			t.Errorf("fallback instructions no longer state: %q", want)

@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,6 +113,317 @@ func newTestService(t *testing.T) (*Service, string) {
 	return New(home, map[string]adapter.Adapter{"fake": &fakeAdapter{}}), ws
 }
 
+func seedJobWithLease(t *testing.T, svc *Service, ws string, j model.Job) model.Job {
+	t.Helper()
+	st, err := store.Open(config.DBPath(svc.Home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	checkout, _ := session.CheckoutIDs(ws)
+	j.CheckoutID = checkout
+	if j.CreatedAt.IsZero() {
+		j.CreatedAt = time.Now().UTC()
+	}
+	if j.UpdatedAt.IsZero() {
+		j.UpdatedAt = j.CreatedAt
+	}
+	if j.Deadline.IsZero() {
+		j.Deadline = j.CreatedAt.Add(time.Hour)
+	}
+	created, err := st.CreateJob(j, j.CreatedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcquireLease(model.Lease{
+		CheckoutID: checkout, JobID: j.ID, ExpiresAt: j.Deadline.Add(time.Hour),
+	}, j.CreatedAt, nil); err != nil {
+		t.Fatal(err)
+	}
+	return created
+}
+
+func TestStaleRecoverySnapshotCannotHoldAStartedJob(t *testing.T) {
+	svc, _ := newTestService(t)
+	st, err := store.Open(config.DBPath(svc.Home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now().UTC()
+	job := model.Job{
+		ID: "j_race", Adapter: "fake", Workspace: "/tmp/race", CheckoutID: "co_race",
+		Prompt: "x", PromptSHA256: "h", Policy: "default", State: model.JobCreated,
+		CreatedAt: now, UpdatedAt: now, Deadline: now.Add(time.Hour),
+	}
+	if _, err := st.CreateJob(job, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcquireLease(model.Lease{CheckoutID: job.CheckoutID, JobID: job.ID, ExpiresAt: now.Add(time.Hour)}, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	expect := store.JobHoldExpect{State: job.State}
+	// The supervisor wins the race after recovery read the record.
+	if _, err := st.UpdateJob(job.ID, now, func(j *model.Job) error {
+		j.State = model.JobStarting
+		j.OwnerPID = 4242
+		j.OwnerProcStart = "live"
+		j.ProviderStartRecorded = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, held, err := st.HoldJobLease(job.ID, job.CheckoutID, "stale recovery", model.ErrProcessLost, &expect, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if held {
+		t.Fatalf("stale recovery held a started job: %+v", got)
+	}
+	live, err := st.GetJob(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live.State != model.JobStarting || live.OwnerPID != 4242 || live.LeaseHeld {
+		t.Fatalf("live job was modified: %+v", live)
+	}
+	lease, found, err := st.GetLease(job.CheckoutID)
+	if err != nil || !found || lease.Held {
+		t.Fatalf("lease found=%v held=%v err=%v", found, lease.Held, err)
+	}
+}
+
+func TestClassifyRanksProcessEvidence(t *testing.T) {
+	state, _ := classify(runner.Outcome{
+		TerminationUnconfirmed: true, TerminationDetail: "stuck",
+		Result: runner.Result{Outcome: model.RunCompleted},
+	})
+	if state != model.JobUnknown {
+		t.Fatalf("unconfirmed termination: %s", state)
+	}
+	state, _ = classify(runner.Outcome{
+		StrayGroup: true, Result: runner.Result{Outcome: model.RunCompleted},
+	})
+	if state != model.JobPartial {
+		t.Fatalf("stray group: %s", state)
+	}
+	state, _ = classify(runner.Outcome{Result: runner.Result{Outcome: model.RunCompleted}})
+	if state != model.JobCompleted {
+		t.Fatalf("clean completion: %s", state)
+	}
+}
+
+func TestFinalizeHoldsLeaseWhenTerminationUnconfirmed(t *testing.T) {
+	svc, ws := newTestService(t)
+	now := time.Now().UTC()
+	job := seedJobWithLease(t, svc, ws, model.Job{
+		ID: "j_stuck", Adapter: "fake", Workspace: ws, Prompt: "x", PromptSHA256: "h",
+		Policy: "default", State: model.JobRunning, CreatedAt: now, UpdatedAt: now,
+		Deadline: now.Add(time.Hour),
+	})
+	got, err := svc.finalize(job, runner.Outcome{
+		TerminationUnconfirmed: true, TerminationDetail: "process group stuck",
+		Result: runner.Result{Outcome: model.RunCompleted, Evidence: "done"},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != model.JobUnknown || !got.LeaseHeld || !got.ResultUnverified {
+		t.Fatalf("job=%+v", got)
+	}
+	st, err := store.Open(config.DBPath(svc.Home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, found, lerr := st.GetLease(job.CheckoutID)
+	_ = st.Close()
+	if lerr != nil || !found || !lease.Held {
+		t.Fatalf("lease found=%v held=%v err=%v", found, lease.Held, lerr)
+	}
+	if _, err := svc.Start(context.Background(), StartInput{Adapter: "fake", Workspace: ws, Prompt: "ok"}); model.Code(err) != model.ErrWorkspaceBusy {
+		t.Fatalf("second writer err=%v", err)
+	}
+}
+
+func TestRecoverHoldsUntrackedProvider(t *testing.T) {
+	svc, ws := newTestService(t)
+	now := time.Now().UTC()
+	job := seedJobWithLease(t, svc, ws, model.Job{
+		ID: "j_untracked", Adapter: "fake", Workspace: ws, Prompt: "x", PromptSHA256: "h",
+		Policy: "default", State: model.JobStarting, CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute), Deadline: now.Add(time.Hour),
+		OwnerPID: 999999, OwnerProcStart: "gone",
+		ProviderStartRecorded: true, ProviderStartAttempted: true,
+	})
+	n, err := svc.Recover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("recovered=%d", n)
+	}
+	got, err := svc.Status(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.State.Terminal() || !got.Job.LeaseHeld || got.Job.ErrorCode != model.ErrProcessLost {
+		t.Fatalf("job=%+v", got.Job)
+	}
+	heldEvents := 0
+	for _, ev := range got.Events {
+		if ev.Kind == "lease_held" {
+			heldEvents++
+		}
+	}
+	if heldEvents != 1 {
+		t.Fatalf("lease_held events=%d", heldEvents)
+	}
+	if _, err := svc.Recover(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.Status(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldEvents = 0
+	for _, ev := range again.Events {
+		if ev.Kind == "lease_held" {
+			heldEvents++
+		}
+	}
+	if heldEvents != 1 {
+		t.Fatalf("repeated recovery appended holds: %d", heldEvents)
+	}
+	if _, err := svc.Start(context.Background(), StartInput{Adapter: "fake", Workspace: ws, Prompt: "ok"}); model.Code(err) != model.ErrWorkspaceBusy {
+		t.Fatalf("second writer err=%v", err)
+	}
+	released, err := svc.Cancel(context.Background(), CancelInput{
+		JobID: job.ID, Grace: time.Second, AcceptUnconfirmed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released.State != model.JobUnknown || released.LeaseHeld {
+		t.Fatalf("released job=%+v", released)
+	}
+}
+
+func TestRecoverHoldsWhenTerminationFails(t *testing.T) {
+	oldTerminate := terminateGroup
+	terminateGroup = func(int, time.Duration) error { return errors.New("stuck in I/O") }
+	defer func() { terminateGroup = oldTerminate }()
+
+	svc, ws := newTestService(t)
+	start, err := platform.ProcStartUTC(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	job := seedJobWithLease(t, svc, ws, model.Job{
+		ID: "j_stuck_child", Adapter: "fake", Workspace: ws, Prompt: "x", PromptSHA256: "h",
+		Policy: "default", State: model.JobRunning, CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute), Deadline: now.Add(time.Hour),
+		OwnerPID: 999999, OwnerProcStart: "gone",
+		ChildPID: os.Getpid(), ChildProcStart: start, ProviderStartRecorded: true,
+	})
+	n, err := svc.Recover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("recovered=%d", n)
+	}
+	got, err := svc.Status(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.State.Terminal() || !got.Job.LeaseHeld {
+		t.Fatalf("job=%+v", got.Job)
+	}
+}
+
+func TestCancelDoesNotReleaseAStuckChild(t *testing.T) {
+	oldTerminate := terminateGroup
+	terminateGroup = func(int, time.Duration) error { return errors.New("stuck in I/O") }
+	defer func() { terminateGroup = oldTerminate }()
+
+	svc, ws := newTestService(t)
+	start, err := platform.ProcStartUTC(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	job := seedJobWithLease(t, svc, ws, model.Job{
+		ID: "j_cancel_stuck", Adapter: "fake", Workspace: ws, Prompt: "x", PromptSHA256: "h",
+		Policy: "default", State: model.JobRunning, CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute), Deadline: now.Add(time.Hour),
+		OwnerPID: 999999, OwnerProcStart: "gone",
+		ChildPID: os.Getpid(), ChildProcStart: start, ProviderStartRecorded: true,
+	})
+	_, err = svc.Cancel(context.Background(), CancelInput{JobID: job.ID, Grace: time.Second})
+	if model.Code(err) != model.ErrProcessLost {
+		t.Fatalf("cancel err=%v", err)
+	}
+	got, err := svc.Status(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Job.State.Terminal() || !got.Job.LeaseHeld {
+		t.Fatalf("job=%+v", got.Job)
+	}
+	if _, err := svc.Start(context.Background(), StartInput{Adapter: "fake", Workspace: ws, Prompt: "ok"}); model.Code(err) != model.ErrWorkspaceBusy {
+		t.Fatalf("second writer err=%v", err)
+	}
+}
+
+func TestFollowDrainsTerminalTail(t *testing.T) {
+	svc, ws := newTestService(t)
+	now := time.Now().UTC()
+	job := seedJobWithLease(t, svc, ws, model.Job{
+		ID: "j_many", Adapter: "fake", Workspace: ws, Prompt: "x", PromptSHA256: "h",
+		Policy: "default", State: model.JobCompleted, CreatedAt: now.Add(-time.Hour),
+		UpdatedAt: now.Add(-time.Hour), Deadline: now.Add(time.Hour), FinishedAt: &now,
+	})
+	st, err := store.Open(config.DBPath(svc.Home), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1001; i++ {
+		if _, err := st.AppendJobEvent(job.ID, "progress", now, map[string]any{"n": i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = st.Close()
+	got, events, err := svc.Follow(context.Background(), job.ID, 0, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.State.Terminal() {
+		t.Fatalf("state=%s", got.State)
+	}
+	// created + lease_acquired + 1001 generated events.
+	if len(events) != 1003 {
+		t.Fatalf("events=%d", len(events))
+	}
+}
+
+func TestLiveRegisteredSessionIncludesPIDZero(t *testing.T) {
+	for _, adapterName := range []string{model.AdapterCodex, model.AdapterOpenCode} {
+		sessions := []model.Session{{Target: model.Target{
+			Adapter: adapterName, NativeSessionID: "n1", PID: 0,
+		}}}
+		if !liveRegisteredSession(adapterName, "n1", sessions) {
+			t.Fatalf("%s PID-zero registration was ignored", adapterName)
+		}
+	}
+	dead := []model.Session{{Target: model.Target{
+		Adapter: model.AdapterClaude, NativeSessionID: "n1", PID: 999999, ProcStart: "gone",
+	}}}
+	if liveRegisteredSession(model.AdapterClaude, "n1", dead) {
+		t.Fatal("a provably dead registration blocked continuation")
+	}
+}
+
 func TestStartCompletesAndPersists(t *testing.T) {
 	svc, ws := newTestService(t)
 	job, err := svc.Start(context.Background(), StartInput{Adapter: "fake", Workspace: ws, Prompt: "ok"})
@@ -199,7 +511,7 @@ func TestWorkspaceBusyAndCancel(t *testing.T) {
 	if model.Code(err) != model.ErrWorkspaceBusy {
 		t.Fatalf("second start err=%v", err)
 	}
-	cancelled, err := svc.Cancel(context.Background(), slow.ID, 3*time.Second)
+	cancelled, err := svc.Cancel(context.Background(), CancelInput{JobID: slow.ID, Grace: 3 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,6 +590,7 @@ func TestRecoverReapsLostSupervisor(t *testing.T) {
 		Prompt: "ok", PromptSHA256: "h", Policy: "default",
 		State: model.JobRunning, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute),
 		Deadline: now.Add(time.Hour), OwnerPID: 999999, OwnerProcStart: "gone",
+		ProviderStartRecorded: true,
 	}
 	if _, err := st.CreateJob(job, now.Add(-time.Minute)); err != nil {
 		t.Fatal(err)
@@ -307,7 +620,7 @@ func TestRecoverReapsLostSupervisor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Job.State != model.JobUnknown || !got.Job.ResultUnverified {
+	if got.Job.State != model.JobInterrupted || !got.Job.ResultUnverified {
 		t.Fatalf("job=%+v", got.Job)
 	}
 	got, err = svc.Status(created.ID)

@@ -156,12 +156,19 @@ amgo cancel <job-id>
 States are `created → starting → running → completed | partial | needs_action |
 failed | timed_out | cancelled | interrupted | unknown`. `completed` requires a
 terminal provider event; a clean provider exit without one is `partial` and
-`result_unverified`. A lost supervisor yields `interrupted` or `unknown`, never
-`completed`.
+`result_unverified`. A lost supervisor yields `interrupted`, or leaves the job
+unresolved with a held lease when the provider may still be running; it never
+yields `completed`.
 
 One amgo job owns a checkout at a time. A second `run` there returns
 `workspace_busy` (exit 10). The lease coordinates amgo writers only; it cannot
 exclude an editor, build tool or another agent.
+
+If amgo cannot prove that the provider and its process group are gone, it does
+not release the lease. The job stays unresolved and `status` shows the reason.
+After inspecting the process yourself, release the workspace with
+`amgo cancel <job-id> --accept-unconfirmed-termination`; that flag is an
+explicit acceptance of the risk that a writer may still be running.
 
 `--policy review` maps to Codex's read-only sandbox. Claude and OpenCode refuse
 that policy because they do not expose an equivalent enforceable sandbox.

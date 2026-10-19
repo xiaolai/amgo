@@ -825,10 +825,11 @@ func fingerprint(target model.Target, conversationID string, explicitConv bool, 
 		h.Write(n[:])
 		h.Write([]byte(s))
 	}
-	write("amgo-message-v1")
+	write("amgo-message-v2")
 	write(target.Adapter)
 	write(target.HostID)
 	write(target.ConfigHome)
+	write(target.Endpoint)
 	write(target.NativeSessionID)
 	write(replyTo)
 	if expectReply {

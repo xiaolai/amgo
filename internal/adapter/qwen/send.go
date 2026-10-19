@@ -107,7 +107,7 @@ func send(ctx context.Context, req adapter.SendRequest) (adapter.SendResult, err
 			ErrorDetail: "cannot dial the qwen inbox",
 		}, model.WrapError(model.ErrTargetUnavailable, "cannot dial the qwen inbox", err)
 	}
-	n, werr := conn.Write(buf.Bytes())
+	n, werr := writeBounded(ctx, conn, buf.Bytes(), timeout)
 	if uc, ok := conn.(*net.UnixConn); ok {
 		_ = uc.CloseWrite()
 	}
@@ -135,6 +135,28 @@ func send(ctx context.Context, req adapter.SendRequest) (adapter.SendResult, err
 	return adapter.SendResult{
 		Outcome: "submitted", NativeDisposition: disposition, Evidence: evidence,
 	}, nil
+}
+
+// writeBounded bounds a frame write by both the IPC timeout and the caller's
+// context. A peer that accepts without reading cannot hold the send past its
+// deadline.
+func writeBounded(ctx context.Context, conn net.Conn, payload []byte, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetWriteDeadline(deadline)
+	stopWatch := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.SetWriteDeadline(time.Now())
+		case <-stopWatch:
+		}
+	}()
+	n, err := conn.Write(payload)
+	close(stopWatch)
+	return n, err
 }
 
 // newReceiptInbox binds the sender's short-lived receipt socket. The protocol

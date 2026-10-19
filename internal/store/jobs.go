@@ -177,8 +177,8 @@ func (s *Store) AcquireLease(l model.Lease, now time.Time, alive func(pid int, p
 			return err
 		}
 		if found && existing.JobID != l.JobID {
-			live := now.Before(existing.ExpiresAt)
-			if live && alive != nil && existing.OwnerPID > 0 {
+			live := existing.Held || now.Before(existing.ExpiresAt)
+			if live && !existing.Held && alive != nil && existing.OwnerPID > 0 {
 				live = alive(existing.OwnerPID, existing.OwnerProcStart)
 			}
 			if live {
@@ -232,6 +232,165 @@ func (s *Store) ReleaseLease(checkoutID, jobID string, now time.Time) error {
 		}
 		return appendJobEvent(tx, jobID, "lease_released", now, map[string]any{"checkout_id": checkoutID})
 	})
+}
+
+// HoldLease marks this job's lease as unresolved. A held lease never expires
+// into another writer's hands; ReleaseLease or an operator risk acceptance is
+// required to remove it.
+func (s *Store) HoldLease(checkoutID, jobID, reason string, now time.Time) error {
+	return s.update(func(tx *bolt.Tx) error {
+		var job model.Job
+		if err := getJSON(tx.Bucket(bucketJobs), []byte(jobID), &job); err != nil {
+			return err
+		}
+		if job.State.Terminal() {
+			// A terminal job's lease is not unresolved work; never revive a hold
+			// from a stale finalization path.
+			return nil
+		}
+		b := tx.Bucket(bucketLeases)
+		var existing model.Lease
+		found, err := getJSONOK(b, []byte(checkoutID), &existing)
+		if err != nil || !found || existing.JobID != jobID {
+			return err
+		}
+		existing.Held = true
+		existing.HoldReason = reason
+		if err := putJSON(b, []byte(checkoutID), existing); err != nil {
+			return err
+		}
+		return appendJobEvent(tx, jobID, "lease_held", now, map[string]any{
+			"checkout_id": checkoutID, "reason": reason,
+		})
+	})
+}
+
+// JobHoldExpect is the snapshot a recovery decision was based on. A hold is
+// applied only when the live record still matches it.
+type JobHoldExpect struct {
+	State                  model.JobState
+	OwnerPID               int
+	OwnerProcStart         string
+	ChildPID               int
+	ChildProcStart         string
+	ProviderStartRecorded  bool
+	ProviderStartAttempted bool
+	StartedAt              *time.Time
+}
+
+// JobMatchesExpect reports whether a live record still matches a recovery
+// snapshot.
+func JobMatchesExpect(j model.Job, e JobHoldExpect) bool { return expectMatches(j, e) }
+
+func expectMatches(j model.Job, e JobHoldExpect) bool {
+	return j.State == e.State &&
+		j.OwnerPID == e.OwnerPID &&
+		j.OwnerProcStart == e.OwnerProcStart &&
+		j.ChildPID == e.ChildPID &&
+		j.ChildProcStart == e.ChildProcStart &&
+		j.ProviderStartRecorded == e.ProviderStartRecorded &&
+		j.ProviderStartAttempted == e.ProviderStartAttempted &&
+		sameTime(j.StartedAt, e.StartedAt)
+}
+
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// HoldJobLease marks a non-terminal job and its lease unresolved in one
+// transaction. It refuses to touch a terminal job. When expect is non-nil, the
+// live record must still match the snapshot the caller acted on; a concurrent
+// supervisor start therefore cannot be finalized from a stale read. The bool
+// reports whether the hold was applied.
+func (s *Store) HoldJobLease(jobID, checkoutID, reason string, code string, expect *JobHoldExpect, now time.Time) (model.Job, bool, error) {
+	var out model.Job
+	held := false
+	err := s.update(func(tx *bolt.Tx) error {
+		jobs := tx.Bucket(bucketJobs)
+		if err := getJSON(jobs, []byte(jobID), &out); err != nil {
+			return err
+		}
+		if out.State.Terminal() {
+			return nil
+		}
+		if expect != nil && !expectMatches(out, *expect) {
+			return nil
+		}
+		leases := tx.Bucket(bucketLeases)
+		var l model.Lease
+		found, err := getJSONOK(leases, []byte(checkoutID), &l)
+		if err != nil {
+			return err
+		}
+		if !found || l.JobID != jobID {
+			return model.NewError(model.ErrInternal, "cannot hold a lease that this job does not own")
+		}
+		if l.Held && out.LeaseHeld && l.HoldReason == reason && out.LeaseHoldReason == reason {
+			// Recovery re-examines held jobs on every command; do not append a
+			// new event for an unchanged hold.
+			held = true
+			return nil
+		}
+		l.Held = true
+		l.HoldReason = reason
+		if err := putJSON(leases, []byte(checkoutID), l); err != nil {
+			return err
+		}
+		out.LeaseHeld = true
+		out.LeaseHoldReason = reason
+		out.ResultUnverified = true
+		out.ErrorCode = code
+		out.ErrorDetail = reason
+		out.UpdatedAt = now
+		if err := putJSON(jobs, []byte(jobID), out); err != nil {
+			return err
+		}
+		held = true
+		return appendJobEvent(tx, jobID, "lease_held", now, map[string]any{
+			"checkout_id": checkoutID, "reason": reason,
+		})
+	})
+	return out, held, err
+}
+
+// ReleaseJobLease removes this job's lease and clears its hold markers in one
+// transaction. It is used for normal completion and for an operator who
+// explicitly accepts unconfirmed termination.
+func (s *Store) ReleaseJobLease(jobID, checkoutID string, now time.Time) (model.Job, error) {
+	var out model.Job
+	err := s.update(func(tx *bolt.Tx) error {
+		jobs := tx.Bucket(bucketJobs)
+		if err := getJSON(jobs, []byte(jobID), &out); err != nil {
+			return err
+		}
+		leases := tx.Bucket(bucketLeases)
+		var l model.Lease
+		found, err := getJSONOK(leases, []byte(checkoutID), &l)
+		if err != nil {
+			return err
+		}
+		released := false
+		if found && l.JobID == jobID {
+			if err := leases.Delete([]byte(checkoutID)); err != nil {
+				return err
+			}
+			released = true
+		}
+		out.LeaseHeld = false
+		out.LeaseHoldReason = ""
+		out.UpdatedAt = now
+		if err := putJSON(jobs, []byte(jobID), out); err != nil {
+			return err
+		}
+		if released {
+			return appendJobEvent(tx, jobID, "lease_released", now, map[string]any{"checkout_id": checkoutID})
+		}
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) RecordArtifact(a model.Artifact, now time.Time) (model.Artifact, error) {

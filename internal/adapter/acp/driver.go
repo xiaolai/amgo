@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"amgo/internal/model"
 	"amgo/internal/runner"
@@ -20,7 +21,7 @@ const (
 	rpcMethodNotFound = -32601
 	rpcAuthRequired   = -32000
 	requestTimeout    = 30 * time.Second
-	maxEvidenceBytes  = 1 << 20
+	maxEvidenceBytes  = runner.MaxEvidenceBytes
 )
 
 // Driver owns one ACP conversation over the runner's stdio pipes.
@@ -132,12 +133,14 @@ type client struct {
 	errMu     sync.Mutex
 	readErr   error
 
-	stateMu     sync.Mutex
-	sessionID   string
-	text        strings.Builder
-	needsAction bool
-	detail      string
-	cancelled   bool
+	stateMu       sync.Mutex
+	sessionID     string
+	text          strings.Builder
+	textBytes     int
+	textTruncated bool
+	needsAction   bool
+	detail        string
+	cancelled     bool
 }
 
 func newClient(dio *runner.DriverIO, version string) *client {
@@ -315,13 +318,20 @@ func (c *client) handleNotification(m rpcMessage) {
 	case "agent_message_chunk":
 		if p.Update.Content.Type == "text" && p.Update.Content.Text != "" {
 			c.stateMu.Lock()
-			if c.text.Len() < maxEvidenceBytes {
-				n := maxEvidenceBytes - c.text.Len()
-				t := p.Update.Content.Text
+			t := p.Update.Content.Text
+			c.textBytes += len(t)
+			if n := maxEvidenceBytes - c.text.Len(); n > 0 {
 				if len(t) > n {
-					t = t[:n]
+					cut := n
+					for cut > 0 && !utf8.RuneStart(t[cut]) {
+						cut--
+					}
+					t = t[:cut]
+					c.textTruncated = true
 				}
 				c.text.WriteString(t)
+			} else {
+				c.textTruncated = true
 			}
 			c.stateMu.Unlock()
 			_ = c.emit(runner.Event{Kind: "progress", Payload: map[string]any{
@@ -391,8 +401,7 @@ func (c *client) call(ctx context.Context, method string, params any, out any) e
 	}); err != nil {
 		return err
 	}
-	select {
-	case m := <-ch:
+	handle := func(m rpcMessage) error {
 		if m.Error != nil {
 			return m.Error
 		}
@@ -402,8 +411,19 @@ func (c *client) call(ctx context.Context, method string, params any, out any) e
 			}
 		}
 		return nil
+	}
+	select {
+	case m := <-ch:
+		return handle(m)
 	case <-c.done:
-		return c.readError()
+		// EOF can become visible after the reader has already queued the final
+		// response. A ready response is stronger evidence than the closed pipe.
+		select {
+		case m := <-ch:
+			return handle(m)
+		default:
+			return c.readError()
+		}
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -510,11 +530,16 @@ func (c *client) prompt(ctx context.Context, sessionID, text string) (runner.Res
 func (c *client) result(stopReason string) runner.Result {
 	c.stateMu.Lock()
 	text := c.text.String()
+	textBytes := c.textBytes
+	textTruncated := c.textTruncated
 	needsAction := c.needsAction
 	detail := c.detail
 	sid := c.sessionID
 	c.stateMu.Unlock()
-	res := runner.Result{Outcome: model.RunCompleted, Evidence: text, NativeSessionID: sid}
+	res := runner.Result{
+		Outcome: model.RunCompleted, Evidence: text, NativeSessionID: sid,
+		EvidenceBytes: textBytes, EvidenceTruncated: textTruncated,
+	}
 	switch {
 	case needsAction:
 		res.Outcome = model.RunNeedsAction

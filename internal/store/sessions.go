@@ -59,7 +59,9 @@ func (s *Store) GetSessionByAlias(alias string) (model.Session, error) {
 	return out, err
 }
 
-func (s *Store) FindSessionByTarget(adapter, configHome, nativeID string) (model.Session, bool, error) {
+// FindSessionByTarget matches the full target identity, including the
+// endpoint. Two servers can expose the same native session ID.
+func (s *Store) FindSessionByTarget(target model.Target) (model.Session, bool, error) {
 	var out model.Session
 	found := false
 	err := s.view(func(tx *bolt.Tx) error {
@@ -68,7 +70,7 @@ func (s *Store) FindSessionByTarget(adapter, configHome, nativeID string) (model
 			if err := decodeJSON(v, &sess); err != nil {
 				return err
 			}
-			if sess.Target.Adapter == adapter && sess.Target.ConfigHome == configHome && sess.Target.NativeSessionID == nativeID {
+			if model.SameTargetIdentity(sess.Target, target) {
 				out = sess
 				found = true
 				return errStopScan

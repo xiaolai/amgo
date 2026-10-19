@@ -32,18 +32,44 @@ func ConfigureDetached(cmd *exec.Cmd) {
 	cmd.SysProcAttr.Setsid = true
 }
 
-// Alive reports whether pid is the same process that was started, not a
-// recycled PID. An empty start value trusts only the PID.
-func Alive(pid int, procStart string) bool {
+// Liveness is a tri-state process check. Dead is the only value that proves the
+// original process is gone. Unknown means the PID exists but its identity could
+// not be verified; callers must not signal it, release its lease, or treat it as
+// dead.
+type Liveness int
+
+const (
+	Dead Liveness = iota
+	Live
+	Unknown
+)
+
+// Check verifies that pid is the same process that was started. A missing or
+// unreadable start identity yields Unknown rather than trusting the PID alone.
+func Check(pid int, procStart string) Liveness {
 	if pid <= 0 || !platform.PIDAlive(pid) {
-		return false
+		return Dead
 	}
 	if procStart == "" {
-		return true
+		return Unknown
 	}
 	start, err := platform.ProcStartUTC(pid)
-	return err == nil && start == procStart
+	if err != nil {
+		return Unknown
+	}
+	if start == procStart {
+		return Live
+	}
+	return Dead
 }
+
+// Alive reports whether the process may still be the original owner. It is
+// intentionally conservative: an unverifiable identity counts as possibly
+// alive. Signaling requires Check(pid, procStart) == Live.
+func Alive(pid int, procStart string) bool { return Check(pid, procStart) != Dead }
+
+// GroupAlive reports whether any process remains in the group led by pid.
+func GroupAlive(pid int) bool { return groupAlive(pid) }
 
 func groupAlive(pid int) bool {
 	if pid <= 0 {

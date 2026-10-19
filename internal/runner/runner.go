@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"os"
@@ -94,22 +95,36 @@ type Parser interface {
 	Result() Result
 }
 
+// MaxEvidenceBytes bounds the result text a parser or driver retains in memory
+// and hands to the supervisor. EvidenceBytes keeps the original size visible.
+const MaxEvidenceBytes = 1 << 20
+
+// exitedProcessIdentity records a child that cmd.Wait already reaped before its
+// start time could be read. It cannot match any ps start string, so the process
+// is provably not the original child even if its PID is reused.
+const exitedProcessIdentity = "amgo:confirmed-exit"
+
 // Result is the provider's terminal evidence, before supervisor classification.
 type Result struct {
-	Outcome          string // completed | partial | needs_action | failed
-	NativeSessionID  string
-	NativeTurnID     string
-	Evidence         string
-	ResultUnverified bool
-	Usage            *model.Usage
-	ErrorCode        string
-	ErrorDetail      string
+	Outcome           string // completed | partial | needs_action | failed
+	NativeSessionID   string
+	NativeTurnID      string
+	Evidence          string
+	EvidenceBytes     int
+	EvidenceTruncated bool
+	ResultUnverified  bool
+	Usage             *model.Usage
+	ErrorCode         string
+	ErrorDetail       string
 }
 
 // Hooks persist ownership and progress. An OnStart error aborts the run; an
 // OnEvent error does too, because silently losing progress is worse than a
 // loudly interrupted job.
 type Hooks struct {
+	// OnSpawn runs immediately before cmd.Start, so recovery can distinguish
+	// "never spawned" from "spawned but the identity was never persisted".
+	OnSpawn func() error
 	OnStart func(pid int, procStart string) error
 	OnEvent func(Event) error
 }
@@ -133,6 +148,14 @@ type Outcome struct {
 	ExitCode     *int
 	ErrorCode    string
 	ErrorDetail  string
+	// StrayGroup means the leader exited but group members were still live and
+	// had to be terminated. The provider's own terminal evidence is not enough
+	// to call the work complete.
+	StrayGroup bool
+	// TerminationUnconfirmed means the process group could not be proven gone.
+	// Callers must not release the workspace lease in that case.
+	TerminationUnconfirmed bool
+	TerminationDetail      string
 }
 
 // Execute starts spec in its own process group, parses stdout as JSONL, writes
@@ -183,7 +206,22 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 	}
 	cmd.Stdout = outW
 	cmd.Stderr = errW
+	if hooks.OnSpawn != nil {
+		if err := hooks.OnSpawn(); err != nil {
+			if stdin != nil {
+				_ = stdin.Close()
+			}
+			_ = outR.Close()
+			_ = outW.Close()
+			_ = errR.Close()
+			_ = errW.Close()
+			return Outcome{}, err
+		}
+	}
 	if err := cmd.Start(); err != nil {
+		if stdin != nil {
+			_ = stdin.Close()
+		}
 		_ = outR.Close()
 		_ = outW.Close()
 		_ = errR.Close()
@@ -194,14 +232,62 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 	_ = outW.Close()
 	_ = errW.Close()
 	pid := cmd.Process.Pid
-	procStart, _ := platform.ProcStartUTC(pid)
+	waitErr := make(chan error, 1)
+	exited := make(chan struct{})
+	go func() { waitErr <- cmd.Wait(); close(exited) }()
+	procStart, psErr := platform.ProcStartUTC(pid)
+	for attempt := 0; psErr != nil && attempt < 5; attempt++ {
+		select {
+		case <-exited:
+		case <-time.After(20 * time.Millisecond):
+		}
+		if channelClosed(exited) {
+			break
+		}
+		procStart, psErr = platform.ProcStartUTC(pid)
+	}
+	if psErr != nil && channelClosed(exited) {
+		procStart = exitedProcessIdentity
+		psErr = nil
+	}
+	if psErr != nil {
+		// Without a start identity, recovery cannot distinguish a live child
+		// from a recycled PID. Never leave an untrackable provider running.
+		termErr := process.TerminateGroup(pid, 5*time.Second)
+		waitBounded(waitErr, 10*time.Second)
+		if stdin != nil {
+			_ = stdin.Close()
+		}
+		_ = outR.Close()
+		_ = errR.Close()
+		out := Outcome{
+			Result: Result{
+				Outcome: model.RunFailed, ErrorCode: model.ErrProcessLost,
+				ErrorDetail: "cannot verify the provider's process identity",
+			},
+			ErrorCode: model.ErrProcessLost, ErrorDetail: "cannot verify the provider's process identity",
+		}
+		if termErr != nil {
+			out.TerminationUnconfirmed = true
+			out.TerminationDetail = termErr.Error()
+		}
+		return out, model.WrapError(model.ErrProcessLost, "cannot verify the provider's process identity", psErr)
+	}
 	if hooks.OnStart != nil {
 		if err := hooks.OnStart(pid, procStart); err != nil {
-			_ = process.TerminateGroup(pid, 5*time.Second)
-			_ = cmd.Wait()
+			termErr := process.TerminateGroup(pid, 5*time.Second)
+			waitBounded(waitErr, 10*time.Second)
+			if stdin != nil {
+				_ = stdin.Close()
+			}
 			_ = outR.Close()
 			_ = errR.Close()
-			return Outcome{}, err
+			out := Outcome{}
+			if termErr != nil {
+				out.TerminationUnconfirmed = true
+				out.TerminationDetail = termErr.Error()
+			}
+			return out, err
 		}
 	}
 
@@ -299,10 +385,13 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 		}()
 	}
 
-	waitErr := make(chan error, 1)
-	go func() { waitErr <- cmd.Wait() }()
-
 	var timedOut, cancelled bool
+	var termErr error
+	terminate := func(grace time.Duration) {
+		if err := process.TerminateGroup(pid, grace); err != nil && termErr == nil {
+			termErr = err
+		}
+	}
 	var timer <-chan time.Time
 	if opts.Timeout > 0 {
 		t := time.NewTimer(opts.Timeout)
@@ -323,23 +412,23 @@ loop:
 			select {
 			case wait = <-waitErr:
 			case <-time.After(5 * time.Second):
-				_ = process.TerminateGroup(pid, 5*time.Second)
-				wait = <-waitErr
+				terminate(5 * time.Second)
+				wait = waitBounded(waitErr, 10*time.Second)
 			}
 			break loop
 		case <-timer:
 			timedOut = true
 			runCancel()
 			time.Sleep(100 * time.Millisecond)
-			_ = process.TerminateGroup(pid, 5*time.Second)
-			wait = <-waitErr
+			terminate(5 * time.Second)
+			wait = waitBounded(waitErr, 10*time.Second)
 			break loop
 		case <-opts.Cancel:
 			cancelled = true
 			runCancel()
 			time.Sleep(100 * time.Millisecond)
-			_ = process.TerminateGroup(pid, 5*time.Second)
-			wait = <-waitErr
+			terminate(5 * time.Second)
+			wait = waitBounded(waitErr, 10*time.Second)
 			break loop
 		case err := <-eventErr:
 			hookMu.Lock()
@@ -347,17 +436,23 @@ loop:
 				hookErr = err
 			}
 			hookMu.Unlock()
-			_ = process.TerminateGroup(pid, 5*time.Second)
-			wait = <-waitErr
+			terminate(5 * time.Second)
+			wait = waitBounded(waitErr, 10*time.Second)
 			break loop
 		case <-ctx.Done():
 			cancelled = true
 			runCancel()
 			time.Sleep(100 * time.Millisecond)
-			_ = process.TerminateGroup(pid, 5*time.Second)
-			wait = <-waitErr
+			terminate(5 * time.Second)
+			wait = waitBounded(waitErr, 10*time.Second)
 			break loop
 		}
+	}
+	// A provider can exit while leaving same-group writers behind. They are
+	// owned by this job: terminate them before the lease can be released.
+	strayGroup := process.GroupAlive(pid)
+	if strayGroup {
+		terminate(5 * time.Second)
 	}
 	scanDone := make(chan struct{})
 	go func() { scan.Wait(); close(scanDone) }()
@@ -412,6 +507,11 @@ loop:
 		LogTruncated: lw.Truncated(),
 		Cancelled:    cancelled,
 		TimedOut:     timedOut,
+		StrayGroup:   strayGroup,
+	}
+	if termErr != nil {
+		out.TerminationUnconfirmed = true
+		out.TerminationDetail = termErr.Error()
 	}
 	if cmd.ProcessState != nil {
 		code := cmd.ProcessState.ExitCode()
@@ -425,6 +525,13 @@ loop:
 	he := hookErr
 	hookMu.Unlock()
 	switch {
+	case termErr != nil:
+		detail := "provider process group could not be confirmed terminated: " + termErr.Error()
+		out.Result.Outcome = model.RunFailed
+		out.Result.ErrorCode = model.ErrProcessLost
+		out.Result.ErrorDetail = detail
+		out.ErrorCode = model.ErrProcessLost
+		out.ErrorDetail = detail
 	case cancelled:
 		out.Result.Outcome = model.RunFailed
 		out.Result.ErrorCode = model.ErrInterrupted
@@ -487,20 +594,50 @@ loop:
 	return out, nil
 }
 
-// logWriter caps total bytes and keeps a streaming SHA-256. It is safe for the
-// two scanner goroutines.
+func channelClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
+// waitBounded waits for cmd.Wait, but returns an error instead of blocking
+// forever when a process cannot be terminated.
+func waitBounded(ch <-chan error, d time.Duration) error {
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(d):
+		return fmt.Errorf("provider did not exit within %s", d)
+	}
+}
+
+// logWriter caps total bytes and keeps a streaming SHA-256. The hash, byte
+// count and stored file describe exactly the same bytes: the truncation marker
+// is reserved inside the cap and passes through the same accounting. It is safe
+// for the two scanner goroutines.
 type logWriter struct {
 	mu        sync.Mutex
 	f         *os.File
-	remaining int64
+	remaining int64 // payload budget, excluding the reserved marker
+	marker    []byte
 	bytes     int64
 	truncated bool
-	marker    bool
+	markerOut bool
+	failed    bool
 	hash      hash.Hash
 }
 
+var logTruncationMarker = []byte("\n[amgo: log truncated at the per-job limit]\n")
+
 func newLogWriter(path string, max int64) (*logWriter, error) {
-	w := &logWriter{remaining: max, hash: sha256.New()}
+	marker := append([]byte(nil), logTruncationMarker...)
+	if int64(len(marker)) > max {
+		marker = marker[:max]
+	}
+	w := &logWriter{remaining: max - int64(len(marker)), marker: marker, hash: sha256.New()}
 	if path == "" {
 		return w, nil
 	}
@@ -518,12 +655,8 @@ func newLogWriter(path string, max int64) (*logWriter, error) {
 func (w *logWriter) write(prefix string, line []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.remaining <= 0 {
+	if w.failed || w.markerOut {
 		w.truncated = true
-		if !w.marker && w.f != nil {
-			_, _ = w.f.WriteString("[amgo: log truncated at the per-job limit]\n")
-			w.marker = true
-		}
 		return
 	}
 	payload := make([]byte, 0, len(prefix)+len(line)+1)
@@ -533,19 +666,49 @@ func (w *logWriter) write(prefix string, line []byte) {
 	if int64(len(payload)) > w.remaining {
 		payload = payload[:w.remaining]
 		w.truncated = true
+		w.account(payload)
+		w.markTruncated()
+		return
 	}
+	w.account(payload)
+}
+
+// account stores the bytes and updates the hash and count with exactly the
+// bytes that were written. A short write or error stops further writes.
+func (w *logWriter) account(payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+	stored := payload
 	if w.f != nil {
-		if _, err := w.f.Write(payload); err != nil {
+		n, err := w.f.Write(payload)
+		if n < 0 {
+			n = 0
+		}
+		if n > len(payload) {
+			n = len(payload)
+		}
+		stored = payload[:n]
+		if err != nil || n != len(payload) {
 			w.truncated = true
+			w.failed = true
 		}
 	}
-	_, _ = w.hash.Write(payload)
-	w.bytes += int64(len(payload))
-	w.remaining -= int64(len(payload))
-	if w.remaining <= 0 && !w.marker && w.f != nil {
-		_, _ = w.f.WriteString("[amgo: log truncated at the per-job limit]\n")
-		w.marker = true
+	_, _ = w.hash.Write(stored)
+	w.bytes += int64(len(stored))
+	w.remaining -= int64(len(stored))
+	if w.remaining < 0 {
+		w.remaining = 0
 	}
+}
+
+func (w *logWriter) markTruncated() {
+	if w.markerOut {
+		return
+	}
+	w.markerOut = true
+	w.truncated = true
+	w.account(w.marker)
 }
 
 func (w *logWriter) Out(line []byte) { w.write("", line) }

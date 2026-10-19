@@ -160,7 +160,7 @@ state is not `unknown`.
 | `run` | Start an owned job: Claude, Codex, OpenCode, or a documented-only Qwen, agy or ACP agent |
 | `jobs`, `status`, `follow` | List jobs, inspect evidence and wait for new events |
 | `result` | Read a terminal job's result and bounded log artifact |
-| `cancel` | Request cancellation and confirm process-group exit |
+| `cancel` | Request cancellation and confirm process-group exit; a held lease needs `--accept-unconfirmed-termination` |
 | `continue` | Continue a stopped job's native session in a new job |
 | `integration` | Print an agent snippet or the JSON CLI contract |
 
@@ -254,6 +254,11 @@ config, and keep amgo's state root owner-only.
   duplicate-risk acceptance; it is never automatic.
 - A job owns one checkout through an amgo lease. It does not exclude editors,
   build tools or another agent outside amgo writing to the same checkout.
+- When the provider or a same-group writer cannot be proven stopped, the job
+  stays unresolved and its lease is held rather than expiring. Inspect the
+  process yourself; only
+  `amgo cancel <job-id> --accept-unconfirmed-termination` releases the
+  workspace after that explicit risk acceptance.
 - Job cancellation asks the provider to cancel first (SIGINT), then escalates to
   SIGTERM and SIGKILL. A provider that detaches a grandchild without cancelling
   it can still leave that process running; amgo reports confirmed group exit,

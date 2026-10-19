@@ -56,15 +56,22 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
 - A job is a new process with file-write and token cost. Start, continue or
   cancel one only on an explicit operator request.
 - Prompts go to the provider on stdin. Never add a bypass or auto-approve flag.
-- `completed` requires a terminal provider event. A lost supervisor leaves
-  `interrupted` or `unknown`; a clean exit without evidence is `partial`.
-- One lease per checkout. Signal only a process whose PID and start time match
-  the recorded identity; cancellation is SIGINT-first.
+- `completed` requires a terminal provider event and confirmed process-group
+  exit. A lost supervisor leaves `interrupted`, or keeps the job unresolved
+  with a held lease when owned execution cannot be proven stopped; a clean exit
+  without evidence is `partial`.
+- One lease per Git worktree root, not per supplied subdirectory. Signal only a
+  process whose PID and start time both verify; an empty identity is unknown,
+  never dead and never signalable. Cancellation is SIGINT-first.
+- If the provider or a same-group writer cannot be proven stopped, retain the
+  lease. Only an operator passing `--accept-unconfirmed-termination` may
+  release it.
 - Qwen and agy are documented-only. Never set `--admit-experimental` on a
   peer's behalf or in a default.
 - Never store, log or export a Qwen `ipcToken`, and never present an
   own-process or controller token.
-- OpenCode endpoints must be loopback; never accept a remote endpoint.
+- OpenCode endpoints must be loopback, credential-free and redirect-free; the
+  endpoint is part of target identity and the idempotency fingerprint.
 - ACP runs only an explicitly supplied `--acp-command`; never select an agent
   from project config or peer content, and never widen its disabled
   filesystem/terminal capabilities or approve a permission request.
@@ -81,6 +88,13 @@ an ignored path. See `dev-docs/publishing.md`.
 
 A new or upgraded dependency requires a row and its full license text in
 `THIRD-PARTY-NOTICES.md`; `make license-check` fails otherwise.
+
+`scripts/release-check.sh` qualifies the native `go test -json` stream: every
+test in `tests/native/required.txt` must report `pass`, and a skip, failure,
+missing result, or a `-list` set that differs from the manifest fails the
+release. Update that manifest deliberately when the native gate set changes.
+The gates run the signed release binary through `AMGO_NATIVE_BIN`, not a
+separately built binary.
 
 ## Layout
 
