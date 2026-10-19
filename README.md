@@ -185,7 +185,8 @@ short transaction; a write failure after native acceptance is reported as
 A job follows the same rule: persist the job and its workspace lease first,
 close the database, run one provider process in its own process group, stream
 bounded output to a private log, then record terminal evidence. A dead
-supervisor leaves `interrupted` or `unknown`, never `completed`.
+supervisor leaves `interrupted`, or keeps the job unresolved with a held lease
+when owned execution cannot be proven stopped; it never reports `completed`.
 
 See the [quickstart](docs/quickstart.md) for the full command flow and
 [security notes](docs/security.md) for the trust model.
