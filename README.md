@@ -11,7 +11,7 @@ message through the provider's own local transport, and runs one owned
 non-interactive provider process with persistent state, bounded logs and
 confirmed cancellation.
 
-**v0.5.0** supports Claude Code and Codex messaging, Claude Code, Codex and
+**v0.5.1** supports Claude Code and Codex messaging, Claude Code, Codex and
 OpenCode jobs, explicit-endpoint OpenCode messaging, and a documented-only ACP
 client on macOS and Linux. Qwen messaging, Qwen/agy jobs and ACP are
 implemented from official protocols but are documented-only: they require
@@ -221,7 +221,7 @@ config, and keep amgo's state root owner-only.
 
 ## Status
 
-| Area | v0.5.0 |
+| Area | v0.5.1 |
 |---|---|
 | One CGO-free Go binary | implemented |
 | Versioned JSON envelope and stable exit codes | implemented |
