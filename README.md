@@ -17,6 +17,11 @@ client on macOS and Linux. Qwen messaging, Qwen/agy jobs and ACP are
 implemented from official protocols but are documented-only: they require
 `--admit-experimental` and are not native-certified.
 
+v0.5.1 adds explicit Claude backend provenance (`backend=default` or
+`backend=custom`) and redacts known credential environment values from job
+logs. The adapter certifies the Claude Code CLI transport, not the model
+vendor.
+
 ## Why
 
 - **Submitted is not delivered.** A Claude send is recorded as `submitted` when
@@ -148,7 +153,7 @@ state is not `unknown`.
 |---|---|
 | `version` | Build version and JSON schema version |
 | `doctor` | Capability probes and read-only state invariants; `--probe` costs one model turn |
-| `adapters` | Adapter capability matrix |
+| `adapters` | Adapter capability matrix; Claude reports `backend=default` or `backend=custom` |
 | `sessions` | Registered sessions; `--discover` adds live native candidates |
 | `join`, `leave` | Register or remove a target alias |
 | `send` | Send a message to a registered target |

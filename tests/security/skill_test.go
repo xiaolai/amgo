@@ -68,6 +68,8 @@ func TestSkillKeepsPermissionBoundary(t *testing.T) {
 		"Never choose or change an `--acp-command`",
 		"Never pass `amgo cancel --accept-unconfirmed-termination`",
 		"Use the Claude Code profile and model backend",
+		"backend=default",
+		"A Claude job inherits this process's environment",
 	} {
 		if !strings.Contains(skill, want) {
 			t.Errorf("skill no longer states: %q", want)
@@ -95,6 +97,8 @@ func TestAgentsFallbackKeepsPermissionBoundary(t *testing.T) {
 		"Never choose an `--acp-command`",
 		"Never pass `amgo cancel --accept-unconfirmed-termination`",
 		"Use the Claude Code profile and model backend",
+		"backend=default",
+		"Do not set or export `ANTHROPIC_BASE_URL`",
 	} {
 		if !strings.Contains(docs, want) {
 			t.Errorf("fallback instructions no longer state: %q", want)

@@ -32,8 +32,9 @@ job, or make you run a shell command.
 - Never pass `amgo cancel --accept-unconfirmed-termination`. Only the user can
   accept that a provider may still be writing to the workspace.
 - Use the Claude Code profile and model backend the user launched amgo in.
-  Do not set `ANTHROPIC_BASE_URL`, a provider credential, or
-  `CLAUDE_CONFIG_DIR` yourself; a job inherits the caller's environment.
+  Do not set or export `ANTHROPIC_BASE_URL`, a provider credential, or
+  `CLAUDE_CONFIG_DIR`; a job inherits the caller's environment. Do not read or
+  print the credential.
 - Never add `--admit-experimental` for Qwen, agy or ACP unless the user
   explicitly asks for that documented-only path after being told it is not
   certified.
@@ -50,13 +51,27 @@ job, or make you run a shell command.
 ## Inspect first
 
 ```sh
-amgo --json adapters        # capability and evidence level per adapter
+amgo --json adapters        # backend=default|custom; custom is not vendor-certified
 amgo --json sessions        # registered aliases; add --discover to list candidates
 amgo --json jobs --limit 20 # recent jobs
 ```
 
 Discovery is read-only. Do not join, send, run or continue until the user has
 approved that exact action and target.
+
+## Claude profiles and backends
+
+The `claude` adapter drives the installed Claude Code CLI. Anthropic and an
+Anthropic-compatible endpoint such as DeepSeek share the same transport.
+
+- Use the profile and backend the user launched amgo in. Do not set, export, or
+  print `ANTHROPIC_BASE_URL`, a provider credential, or `CLAUDE_CONFIG_DIR`.
+- `amgo --json adapters` reports `backend=default` or `backend=custom`. Treat
+  `custom` as provenance, not as a success or failure.
+- A Claude job inherits this process's environment, not the target session's
+  config home. Do not add `--model` unless the user specified it.
+- Job logs redact known credential environment values, but never put a secret
+  in a prompt or message.
 
 ## Messaging
 
@@ -90,6 +105,8 @@ amgo --json cancel <job-id>
 ```
 
 - One amgo job owns a checkout. A second run there returns `workspace_busy`.
+- A Claude job runs the installed CLI in this process's environment; the
+  configured model backend is inherited, not chosen by amgo.
 - `--background` returns after spawning one supervisor; it does not mean the
   job finished.
 - `continue` requires a terminal job with a native session ID.
