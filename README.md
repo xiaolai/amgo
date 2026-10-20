@@ -127,7 +127,7 @@ state is not `unknown`.
 - Claude Code 2.1.248+ for Claude messaging. The adapter drives the installed
   CLI; its model backend is selected by the CLI's environment and config home
   (Anthropic or an Anthropic-compatible endpoint such as DeepSeek). amgo does
-  not read or store the API key.
+  not store or export the API key.
 - Codex 0.163.x for Codex messaging and jobs; other minor releases fail closed.
 - OpenCode 1.19.3 for OpenCode jobs and explicit-endpoint messaging.
 - Qwen Code for Qwen messaging/jobs; those paths are documented-only and need

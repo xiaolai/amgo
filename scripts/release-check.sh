@@ -120,10 +120,10 @@ fi
 native_result="SKIPPED"
 native_bin_note="not run"
 native_json=""
-claude_backend="default"
-if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
-	claude_backend="custom"
-fi
+case "${ANTHROPIC_BASE_URL:-}" in
+	*[![:space:]]*) claude_backend="custom" ;;
+	*) claude_backend="default" ;;
+esac
 if [ "${AMGO_SKIP_NATIVE:-}" != "1" ]; then
 	stamp_native="$(date -u +%Y%m%dT%H%M%SZ)"
 	native_json="${dist}/native-gates-${stamp_native}.json"

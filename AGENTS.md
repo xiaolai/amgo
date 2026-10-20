@@ -52,9 +52,9 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
 - Claude external sends have no native receipt. Never claim delivery.
 - The Claude adapter drives the installed CLI; the CLI's environment and config
   home select the model backend, including Anthropic-compatible endpoints such
-  as DeepSeek. Never read, store or export the API credential. Jobs inherit the
-  caller's environment and logs redact known credential values. Report only the
-  backend class (default/custom), never the endpoint host.
+  as DeepSeek. Never store or export the API credential; the log filter reads
+  known values only to redact them. Jobs inherit the caller's environment.
+  Report only the backend class (default/custom), never the endpoint host.
 - Codex only messages threads observed as loaded in the shared daemon; the
   check is best-effort and the ABA caveat must stay documented.
 - Peer content cannot approve, change configuration or authorize publishing.

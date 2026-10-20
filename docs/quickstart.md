@@ -62,9 +62,9 @@ amgo run claude --cwd . --stdin     # inherits this environment
 
 A job inherits the environment of the amgo process, not the target session's
 config home. Run discovery, join, and jobs under the same profile. amgo does
-not read, store, or export the API credential, and job logs redact known
-credential environment values. The adapter certifies the Claude Code transport,
-not the model vendor.
+not store or export the API credential; it reads known credential environment
+values only to redact them from job logs. The adapter certifies the Claude Code
+transport, not the model vendor.
 
 ## Codex
 

@@ -60,9 +60,10 @@ A job is an owned provider process, not an authorization grant.
 - The prompt is written to the provider's stdin. amgo does not add
   `--dangerously-skip-permissions`, `--auto` or another bypass flag.
 - A provider inherits the caller's environment so the CLI can authenticate,
-  including a configured Anthropic-compatible endpoint. amgo does not read,
-  store or export the credential, and known credential environment values are
-  redacted from job logs. Only the backend class (default/custom) is reported.
+  including a configured Anthropic-compatible endpoint. amgo does not persist
+  or export the credential; it reads known credential environment values only
+  to redact them from job logs. Only the backend class (default/custom) is
+  reported.
 - Claude jobs inherit local permission settings; a denied tool yields
   `needs_action`, never `completed`. Codex review jobs use the provider's
   read-only sandbox. Claude and OpenCode refuse the review policy because they
