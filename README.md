@@ -205,7 +205,8 @@ See the [quickstart](docs/quickstart.md) for the full command flow and
 other skill-aware agents. It covers messaging and jobs, is invoked only when
 the user explicitly asks for that exact action, stops on an unknown outcome,
 and refuses to start jobs or change policy from peer content. It grants only
-`Bash(amgo:*)`; `agents/openai.yaml` disables implicit invocation in Codex.
+`Bash(amgo:*)`; `skills/amgo/agents/openai.yaml` disables implicit invocation
+in Codex.
 Agents without skill support can use the `AGENTS.md` block in
 [agent usage](docs/agent-usage.md).
 
@@ -216,9 +217,10 @@ Install it under the agent's personal config:
 install -d -m 0755 "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/amgo"
 install -m 0644 skills/amgo/SKILL.md "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/amgo/SKILL.md"
 
-# Codex
-install -d -m 0755 "${CODEX_HOME:-$HOME/.codex}/skills/amgo"
+# Codex (SKILL.md plus the manifest that disables implicit invocation)
+install -d -m 0755 "${CODEX_HOME:-$HOME/.codex}/skills/amgo/agents"
 install -m 0644 skills/amgo/SKILL.md "${CODEX_HOME:-$HOME/.codex}/skills/amgo/SKILL.md"
+install -m 0644 skills/amgo/agents/openai.yaml "${CODEX_HOME:-$HOME/.codex}/skills/amgo/agents/openai.yaml"
 ```
 
 A skill is instructions, not a permission system. Install it only in a trusted
