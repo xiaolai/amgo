@@ -120,6 +120,10 @@ fi
 native_result="SKIPPED"
 native_bin_note="not run"
 native_json=""
+claude_backend="default"
+if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+	claude_backend="custom"
+fi
 if [ "${AMGO_SKIP_NATIVE:-}" != "1" ]; then
 	stamp_native="$(date -u +%Y%m%dT%H%M%SZ)"
 	native_json="${dist}/native-gates-${stamp_native}.json"
@@ -182,6 +186,7 @@ report="${dist}/release-check-${stamp}.md"
 	echo "- Native gates: ${native_result}"
 	echo "- Native gates binary: ${native_bin_note}"
 	echo "- Native gates evidence: ${native_json:-none}"
+	echo "- Claude backend: ${claude_backend}"
 	echo
 	if [ "$native_result" = "PASS" ] && [ "$vuln_result" = "PASS" ] && [ "$license_result" = "PASS" ]; then
 		echo "Result: PASS"

@@ -39,13 +39,19 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		NativeReceipts:  false,
 		Jobs:            false,
 		Resume:          false,
+		Backend:         backendClass(),
 		Constraints: []string{
 			"an external sender receives no native delivery receipts",
 			"receiver holds/refusals are unobservable",
 			"session_id is an ingress guard only",
 			"headless jobs inherit local permission settings; no bypass flag is added",
 			"review policy is not offered: plan mode is not an OS sandbox",
+			"the adapter certifies the Claude Code CLI and its local transport, not the model vendor",
 		},
+	}
+	if caps.Backend == "custom" {
+		caps.Constraints = append(caps.Constraints,
+			"the model backend is a configured Anthropic-compatible endpoint; model behavior is not vendor-certified")
 	}
 	out, err := exec.CommandContext(ctx, "claude", "--version").Output()
 	if err != nil {
@@ -67,6 +73,15 @@ func (a *Adapter) Probe(ctx context.Context) (model.Capabilities, error) {
 		caps.Constraints = append(caps.Constraints, "installed version is below the known floor")
 	}
 	return caps, nil
+}
+
+// backendClass reports whether an alternate Anthropic-compatible endpoint is
+// configured. It never reads or returns the endpoint or its credential.
+func backendClass() string {
+	if strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")) != "" {
+		return "custom"
+	}
+	return "default"
 }
 
 func (a *Adapter) Discover(ctx context.Context, req adapter.DiscoverRequest) ([]model.Candidate, error) {

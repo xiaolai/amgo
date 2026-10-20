@@ -29,7 +29,12 @@ type Capabilities struct {
 	NativeReceipts  bool     `json:"native_receipts"`
 	Jobs            bool     `json:"jobs"`
 	Resume          bool     `json:"resume"`
-	Constraints     []string `json:"constraints,omitempty"`
+	// Backend is the model-backend class for a CLI-driven adapter:
+	// "default" when the vendor's endpoint is used, "custom" when the
+	// environment selects an Anthropic-compatible endpoint. It never carries
+	// a host or credential.
+	Backend     string   `json:"backend,omitempty"`
+	Constraints []string `json:"constraints,omitempty"`
 }
 
 // Target is the immutable native identity snapshot used for a send.

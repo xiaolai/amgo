@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -48,6 +49,11 @@ func TestHelperProcess(t *testing.T) {
 		for i := 0; i < 50; i++ {
 			fmt.Printf("{\"event\":\"text\",\"text\":%q}\n", line)
 		}
+	case "secret":
+		token := os.Getenv("ANTHROPIC_AUTH_TOKEN")
+		fmt.Printf("{\"event\":\"text\",\"text\":%q}\n", token)
+		fmt.Fprintln(os.Stderr, "stderr token "+token)
+		fmt.Println(`{"event":"done","status":"success"}`)
 	case "stray":
 		child := exec.Command("sleep", "60")
 		child.Stdout = nil
@@ -256,6 +262,47 @@ func TestExecuteBoundsLog(t *testing.T) {
 	}
 	if int64(len(raw)) != out.LogBytes {
 		t.Fatalf("log bytes=%d, file bytes=%d", out.LogBytes, len(raw))
+	}
+}
+
+type captureParser struct {
+	lines []string
+}
+
+func (p *captureParser) Line(line []byte) ([]Event, error) {
+	p.lines = append(p.lines, string(line))
+	return nil, nil
+}
+
+func (p *captureParser) Result() Result { return Result{Outcome: model.RunCompleted} }
+
+func TestExecuteRedactsCredentialValues(t *testing.T) {
+	secret := strings.Repeat("z", 32)
+	logPath := filepath.Join(t.TempDir(), "agent.log")
+	spec := helperSpec(t, "secret")
+	spec.Env = append(spec.Env, "ANTHROPIC_AUTH_TOKEN="+secret)
+	p := &captureParser{}
+	out, err := Execute(context.Background(), spec, p, Options{LogPath: logPath}, Hooks{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte(secret)) {
+		t.Fatalf("log leaked the credential: %q", raw)
+	}
+	if !bytes.Contains(raw, []byte("[redacted]")) {
+		t.Fatalf("log has no redaction marker: %q", raw)
+	}
+	for _, line := range p.lines {
+		if strings.Contains(line, secret) {
+			t.Fatalf("parser saw the credential: %q", line)
+		}
+	}
+	if out.Result.Outcome != model.RunCompleted {
+		t.Fatalf("outcome=%s", out.Result.Outcome)
 	}
 }
 

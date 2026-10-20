@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,6 +75,7 @@ func newLineReader(r io.Reader, lw *logWriter) *lineReader {
 func (l *lineReader) Next() ([]byte, error) {
 	if l.sc.Scan() {
 		line := append([]byte(nil), l.sc.Bytes()...)
+		line = l.lw.redact(line)
 		l.lw.Out(line)
 		return line, nil
 	}
@@ -178,6 +181,7 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 	if err != nil {
 		return Outcome{}, model.WrapError(model.ErrInternal, "cannot create job log", err)
 	}
+	lw.addSecrets(spec.Env)
 	defer lw.Close()
 
 	cmd := exec.Command(spec.Path, spec.Args...)
@@ -332,6 +336,7 @@ func Execute(ctx context.Context, spec Spec, parser Parser, opts Options, hooks 
 			sc.Buffer(make([]byte, 0, 64<<10), MaxLineBytes)
 			for sc.Scan() {
 				line := append([]byte(nil), sc.Bytes()...)
+				line = lw.redact(line)
 				lw.Out(line)
 				events, err := parser.Line(line)
 				if err != nil {
@@ -628,9 +633,26 @@ type logWriter struct {
 	markerOut bool
 	failed    bool
 	hash      hash.Hash
+	secrets   [][]byte
 }
 
 var logTruncationMarker = []byte("\n[amgo: log truncated at the per-job limit]\n")
+
+// credentialEnvNames are the environment values redacted from provider output.
+// The list is intentionally explicit: redacting every *_TOKEN or *_KEY would
+// mangle ordinary diagnostics.
+var credentialEnvNames = []string{
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_API_KEY",
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"CODEX_API_KEY",
+	"CODEX_ACCESS_TOKEN",
+	"DEEPSEEK_API_KEY",
+	"OPENAI_API_KEY",
+	"OPENCODE_SERVER_PASSWORD",
+	"GITHUB_TOKEN",
+	"GH_TOKEN",
+}
 
 func newLogWriter(path string, max int64) (*logWriter, error) {
 	marker := append([]byte(nil), logTruncationMarker...)
@@ -638,6 +660,7 @@ func newLogWriter(path string, max int64) (*logWriter, error) {
 		marker = marker[:max]
 	}
 	w := &logWriter{remaining: max - int64(len(marker)), marker: marker, hash: sha256.New()}
+	w.addSecrets(os.Environ())
 	if path == "" {
 		return w, nil
 	}
@@ -652,9 +675,43 @@ func newLogWriter(path string, max int64) (*logWriter, error) {
 	return w, nil
 }
 
+// addSecrets records credential environment values for redaction. Call it
+// before the scanner goroutines start; the resulting slice is read-only.
+func (w *logWriter) addSecrets(env []string) {
+	known := make(map[string]bool, len(credentialEnvNames))
+	for _, name := range credentialEnvNames {
+		known[name] = true
+	}
+	seen := make(map[string]bool)
+	for _, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok || !known[name] {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if len(value) < 8 || seen[value] {
+			continue
+		}
+		seen[value] = true
+		w.secrets = append(w.secrets, []byte(value))
+	}
+	// Replace longer values first so a contained value cannot split them.
+	sort.Slice(w.secrets, func(i, j int) bool { return len(w.secrets[i]) > len(w.secrets[j]) })
+}
+
+func (w *logWriter) redact(line []byte) []byte {
+	for _, secret := range w.secrets {
+		if bytes.Contains(line, secret) {
+			line = bytes.ReplaceAll(line, secret, []byte("[redacted]"))
+		}
+	}
+	return line
+}
+
 func (w *logWriter) write(prefix string, line []byte) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	line = w.redact(line)
 	if w.failed || w.markerOut {
 		w.truncated = true
 		return

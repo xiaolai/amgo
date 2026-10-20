@@ -440,7 +440,11 @@ func (a *App) cmdAdapters(ctx context.Context) int {
 	caps := doctor.AdapterCapabilities(ctx, a.Adapters)
 	return a.ok("adapters", map[string]any{"adapters": caps}, func() {
 		for _, c := range caps {
-			fmt.Fprintf(a.Out, "%-8s maturity=%s live=%v receipts=%v %s\n", c.Adapter, c.Maturity, c.LiveMessaging, c.NativeReceipts, render.Safe(strings.Join(c.Constraints, "; ")))
+			backend := ""
+			if c.Backend != "" {
+				backend = " backend=" + c.Backend
+			}
+			fmt.Fprintf(a.Out, "%-8s maturity=%s live=%v receipts=%v%s %s\n", c.Adapter, c.Maturity, c.LiveMessaging, c.NativeReceipts, backend, render.Safe(strings.Join(c.Constraints, "; ")))
 		}
 	})
 }

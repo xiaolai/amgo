@@ -390,6 +390,17 @@ func TestDiscoveryRejectsSymlinkedKey(t *testing.T) {
 	}
 }
 
+func TestBackendClass(t *testing.T) {
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+	if got := backendClass(); got != "default" {
+		t.Fatalf("unset base URL: %s", got)
+	}
+	t.Setenv("ANTHROPIC_BASE_URL", "https://example.invalid/anthropic")
+	if got := backendClass(); got != "custom" {
+		t.Fatalf("configured base URL: %s", got)
+	}
+}
+
 func mustStart(t *testing.T) string {
 	t.Helper()
 	s, err := platform.ProcStartUTC(os.Getpid())
