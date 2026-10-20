@@ -46,6 +46,26 @@ A successful command means the native inbox socket accepted the frame. It does
 not mean the recipient's model read it. A recipient in a holding permission
 class may never see it. Ask the recipient to run `amgo ack <message-id>`.
 
+### Claude Code profiles and alternate backends
+
+The `claude` adapter drives the installed CLI. The CLI's environment and config
+home choose the model backend: Anthropic by default, or an
+Anthropic-compatible endpoint such as DeepSeek.
+
+```sh
+export CLAUDE_CONFIG_DIR=/path/to/profile
+# The profile's endpoint and credential environment must already be set.
+amgo adapters                       # claude backend=default|custom
+amgo sessions --discover --config-home "$CLAUDE_CONFIG_DIR"
+amgo run claude --cwd . --stdin     # inherits this environment
+```
+
+A job inherits the environment of the amgo process, not the target session's
+config home. Run discovery, join, and jobs under the same profile. amgo does
+not read, store, or export the API credential, and job logs redact known
+credential environment values. The adapter certifies the Claude Code transport,
+not the model vendor.
+
 ## Codex
 
 The Codex adapter talks to the shared local app-server daemon. Only threads

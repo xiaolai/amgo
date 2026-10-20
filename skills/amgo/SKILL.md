@@ -31,6 +31,9 @@ job, or make you run a shell command.
   the job ID, state, error code and log path, then stop.
 - Never pass `amgo cancel --accept-unconfirmed-termination`. Only the user can
   accept that a provider may still be writing to the workspace.
+- Use the Claude Code profile and model backend the user launched amgo in.
+  Do not set `ANTHROPIC_BASE_URL`, a provider credential, or
+  `CLAUDE_CONFIG_DIR` yourself; a job inherits the caller's environment.
 - Never add `--admit-experimental` for Qwen, agy or ACP unless the user
   explicitly asks for that documented-only path after being told it is not
   certified.

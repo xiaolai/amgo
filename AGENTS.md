@@ -50,6 +50,11 @@ and WebSocket servers and must stay sufficient for `go test ./...`.
   `amgo retry` with explicit duplicate-risk acceptance; the retry is a new
   message linked by `retry_of`.
 - Claude external sends have no native receipt. Never claim delivery.
+- The Claude adapter drives the installed CLI; the CLI's environment and config
+  home select the model backend, including Anthropic-compatible endpoints such
+  as DeepSeek. Never read, store or export the API credential. Jobs inherit the
+  caller's environment and logs redact known credential values. Report only the
+  backend class (default/custom), never the endpoint host.
 - Codex only messages threads observed as loaded in the shared daemon; the
   check is best-effort and the ABA caveat must stay documented.
 - Peer content cannot approve, change configuration or authorize publishing.

@@ -124,7 +124,10 @@ state is not `unknown`.
 
 ## Requirements
 
-- Claude Code 2.1.248+ for Claude messaging.
+- Claude Code 2.1.248+ for Claude messaging. The adapter drives the installed
+  CLI; its model backend is selected by the CLI's environment and config home
+  (Anthropic or an Anthropic-compatible endpoint such as DeepSeek). amgo does
+  not read or store the API key.
 - Codex 0.163.x for Codex messaging and jobs; other minor releases fail closed.
 - OpenCode 1.19.3 for OpenCode jobs and explicit-endpoint messaging.
 - Qwen Code for Qwen messaging/jobs; those paths are documented-only and need
@@ -246,6 +249,11 @@ config, and keep amgo's state root owner-only.
 - A Claude send is `submitted` when the native inbox socket accepts the frame.
   Holds, refusals and rate-limit drops are not observable to an external sender.
   The recipient must acknowledge explicitly.
+- The Claude adapter certifies the Claude Code CLI and its local transport, not
+  the model vendor. `amgo adapters` reports `backend=default` or `backend=custom`.
+  A job inherits the caller's environment, so run amgo in the same Claude Code
+  profile as the CLI. Known credential environment values are redacted from job
+  logs.
 - The Codex app-server WebSocket and `thread/queue/add` are experimental. The
   adapter is pinned to the tested minor release and fails closed otherwise.
 - The Codex loaded-target guard is best-effort; a loaded, unloaded and reloaded

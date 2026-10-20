@@ -65,6 +65,9 @@ wait on a cross-session message.
   tokens.
 - Never pass `amgo cancel --accept-unconfirmed-termination`. Only the user can
   accept that a provider may still be writing to the workspace.
+- Use the Claude Code profile and model backend the user launched amgo in. Do
+  not set `ANTHROPIC_BASE_URL`, a provider credential, or `CLAUDE_CONFIG_DIR`
+  yourself; a job inherits the caller's environment.
 - Report job state literally. Only `completed` is success; `partial`,
   `needs_action` and `unknown` are not.
 - Never add `--admit-experimental` for Qwen, agy or ACP without an explicit
